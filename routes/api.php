@@ -63,6 +63,8 @@ Route::prefix('v1')->group(function () {
             Route::post('logout', [AuthController::class, 'logout']);
             Route::get('user', [AuthController::class, 'user']);
             Route::put('user', [AuthController::class, 'updateUser']);
+            Route::post('avatar', [AuthController::class, 'uploadAvatar']);
+            Route::delete('avatar', [AuthController::class, 'deleteAvatar']);
             Route::put('pin/login', [AuthController::class, 'setLoginPin']);
             Route::put('pin/transaction', [AuthController::class, 'setTransactionPin']);
             Route::post('pin/transaction/verify', [AuthController::class, 'verifyTransactionPin']);

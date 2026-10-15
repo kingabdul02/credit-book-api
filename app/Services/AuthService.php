@@ -108,6 +108,7 @@ class AuthService
     {
         $user->update(array_filter([
             'name' => $data['name'] ?? null,
+            'email' => $data['email'] ?? null,
             'default_currency' => $data['default_currency'] ?? null,
             'settings' => $data['settings'] ?? null,
             'avatar_url' => $data['avatar_url'] ?? null,

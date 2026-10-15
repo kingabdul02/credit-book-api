@@ -1,0 +1,932 @@
+@hostname = http://localhost:8000/api/v1
+
+###
+# @name login
+# 
+# Validation Rules:
+# - phone_number: required, string
+# - pin: required, string (6 digits)
+#
+# Example Response (200 OK):
+# {
+#   "message": "Login successful.",
+#   "user": { "id": "uuid", "name": "Demo User", "phone_number": "+13001234567", ... },
+#   "token": "1|token_string..."
+# }
+@accessToken = {{login.response.body.token}}
+
+POST {{hostname}}/auth/login HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+{
+    "phone_number": "+2348066789669",
+    "pin": "123456"
+}
+
+###
+# @name register
+#
+# Validation Rules:
+# - name: required, string, max:255
+# - phone_number: required, string, max:20, unique:users
+# - currency: sometimes, string, size:3 (e.g. NGN, USD)
+#
+# Example Response (201 Created):
+# {
+#   "message": "Account created successfully.",
+#   "user": { ... },
+#   "token": "2|token_string..."
+# }
+POST {{hostname}}/auth/register HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+{
+    "name": "New User",
+    "phone_number": "+13001234567",
+    "currency": "NGN"
+}
+
+###
+# Get Authenticated User
+#
+# Validation Rules: None
+#
+# Example Response (200 OK):
+# {
+#   "user": {
+#     "id": "uuid",
+#     "name": "Demo User",
+#     "default_currency": "NGN",
+#     "has_pin": false,
+#     "created_at": "2026-06-07T00:00:00.000000Z"
+#   }
+# }
+GET {{hostname}}/auth/user HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Update User Profile
+#
+# Validation Rules:
+# - name: sometimes, string, max:255
+# - default_currency: sometimes, string, size:3
+# - settings: sometimes, array
+# - avatar_url: sometimes, nullable, string
+#
+# Example Response (200 OK):
+# {
+#   "message": "Profile updated successfully.",
+#   "user": { ... }
+# }
+PUT {{hostname}}/auth/user HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "name": "Updated Demo User",
+    "default_currency": "USD"
+}
+
+###
+# Set Login PIN (6 Digits)
+PUT {{hostname}}/auth/pin/login HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "pin": "123456"
+}
+
+###
+# Set Transaction PIN (4 Digits)
+PUT {{hostname}}/auth/pin/transaction HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "pin": "1234"
+}
+
+###
+# Verify Transaction PIN
+POST {{hostname}}/auth/pin/transaction/verify HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "pin": "1234"
+}
+
+###
+# ──────────────────────────────────────────────
+# CONTACTS
+# ──────────────────────────────────────────────
+
+###
+# @name createContact
+#
+# Validation Rules:
+# - full_name: required, string, max:255
+# - nickname: nullable, string, max:255
+# - phone_number: nullable, string, max:20
+# - profile_picture: nullable, string, max:500
+# - note: nullable, string, max:1000
+# - is_favorite: sometimes, boolean
+# - client_id: required, uuid, unique:contacts
+#
+# Example Response (201 Created):
+# {
+#   "message": "Contact created successfully.",
+#   "contact": {
+#     "id": "uuid",
+#     "full_name": "Samuel Jackson",
+#     "client_id": "client-uuid-12345"
+#   }
+# }
+@contactId = {{createContact.response.body.contact.id}}
+
+POST {{hostname}}/contacts HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "full_name": "Samuel Jackson",
+    "nickname": "Sam",
+    "phone_number": "+2348000000000",
+    "client_id": "client-uuid-12345"
+}
+
+###
+# List Contacts
+#
+# Query Parameters:
+# - per_page: int (default: 15)
+# - sort_by: string (default: full_name)
+# - sort_dir: asc|desc (default: asc)
+# - search: string
+#
+# Example Response (200 OK):
+# {
+#   "data": [ { "id": "uuid", "full_name": "...", "debts_count": 0 } ],
+#   "links": { ... },
+#   "meta": { ... }
+# }
+GET {{hostname}}/contacts?per_page=15&sort_by=full_name&sort_dir=asc HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Search Contacts
+GET {{hostname}}/contacts?search=Sam HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Get Favorite Contacts
+# Example Response (200 OK): {"data": [ ...favorites... ]}
+GET {{hostname}}/contacts/favorites HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Get Single Contact (Includes Debt Summary)
+#
+# Example Response (200 OK):
+# {
+#   "contact": {
+#     "id": "uuid",
+#     "full_name": "Samuel Jackson",
+#     "total_owed_to_user": "50000.00",
+#     "total_user_owes": "0.00",
+#     "debts": [ ... array of Debt objects ... ]
+#   }
+# }
+GET {{hostname}}/contacts/{{contactId}} HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Update Contact
+#
+# Validation Rules:
+# - All fields optional (same format as Store, except client_id is not allowed)
+#
+# Example Response (200 OK):
+# {
+#   "message": "Contact updated successfully.",
+#   "contact": { ... updated data ... }
+# }
+PUT {{hostname}}/contacts/{{contactId}} HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "is_favorite": true,
+    "note": "A very important contact"
+}
+
+###
+# ──────────────────────────────────────────────
+# DEBTS & TRANSACTIONS
+# ──────────────────────────────────────────────
+
+###
+# @name createDebt
+#
+# Validation Rules:
+# - contact_id: required, uuid, exists:contacts,id
+# - transaction_type: required, string, in:THEY_OWE_ME,I_OWE_THEM
+# - amount: required, numeric, min:0.01
+# - currency: sometimes, string, size:3
+# - note: nullable, string, max:1000
+# - category: nullable, string, max:100
+# - due_date: nullable, date, after_or_equal:today
+# - reminder_enabled: sometimes, boolean
+# - client_id: required, uuid, unique:debts
+# - transaction_client_id: nullable, uuid
+#
+# Example Response (201 Created):
+# {
+#   "message": "Debt recorded successfully.",
+#   "debt": {
+#     "id": "uuid",
+#     "transaction_type": "THEY_OWE_ME",
+#     "original_amount": 50000,
+#     "status": "UNPAID",
+#     "transactions": [ { "type": "INITIAL", "amount": 50000 } ]
+#   }
+# }
+@debtId = {{createDebt.response.body.debt.id}}
+
+POST {{hostname}}/debts HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "contact_id": "{{contactId}}",
+    "transaction_type": "THEY_OWE_ME",
+    "amount": 50000,
+    "note": "Business Loan",
+    "category": "Business",
+    "due_date": "2026-12-31",
+    "client_id": "debt-client-uuid-123"
+}
+
+###
+# List Debts (With Filters)
+#
+# Query Parameters:
+# - status: string (e.g., UNPAID, PAID, OVERDUE)
+# - transaction_type: THEY_OWE_ME | I_OWE_THEM
+# - contact_id: uuid
+# - sort_by: string (e.g. created_at, due_date)
+#
+# Example Response (200 OK):
+# {
+#   "data": [ { ... debt objects ... } ],
+#   "links": { ... }, "meta": { ... }
+# }
+GET {{hostname}}/debts?status=PAID&transaction_type=I_OWE_THEM&per_page=100 HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Get Single Debt Details (Includes Transactions)
+# Example Response (200 OK): {"debt": { "id": "uuid", ..., "transactions": [ ... ] }}
+GET {{hostname}}/debts/{{debtId}} HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Record a Payment
+#
+# Validation Rules:
+# - amount: required, numeric, min:0.01
+# - type: sometimes, string, in:PAYMENT,ADDITIONAL (default: PAYMENT)
+# - note: nullable, string, max:1000
+# - client_id: required, uuid, unique:transactions
+#
+# Example Response (201 Created):
+# {
+#   "message": "Payment recorded successfully.",
+#   "debt": {
+#     "id": "uuid",
+#     "paid_amount": 25000,
+#     "progress_percentage": 50,
+#     "status": "PARTIALLY_PAID"
+#   }
+# }
+POST {{hostname}}/debts/{{debtId}}/transactions HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "type": "PAYMENT",
+    "amount": 25000,
+    "note": "First installment payment",
+    "client_id": "txn-client-uuid-1"
+}
+
+###
+# Record an Additional Amount to Existing Debt
+# (Same validation rules as payment, just pass type=ADDITIONAL)
+POST {{hostname}}/debts/{{debtId}}/transactions HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "type": "ADDITIONAL",
+    "amount": 5000,
+    "note": "Late fee added",
+    "client_id": "txn-client-uuid-2"
+}
+
+###
+# Get Recent Transactions
+# Query Parameters: limit (default 20)
+# Example Response (200 OK): {"data": [ ... list of transactions ... ]}
+GET {{hostname}}/transactions/recent?limit=10 HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# ──────────────────────────────────────────────
+# ANALYTICS & DASHBOARD
+# ──────────────────────────────────────────────
+
+###
+# Dashboard Summary
+#
+# Example Response (200 OK):
+# {
+#   "dashboard": {
+#     "total_owed_to_me": "50000.00",
+#     "total_i_owe": "10000.00",
+#     "net_balance": "40000.00",
+#     "active_debts_count": 5,
+#     "overdue_count": 1
+#   }
+# }
+GET {{hostname}}/analytics/dashboard HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Deep Insights
+#
+# Query Parameter: period (1month, 3months, 6months, 1year, all)
+# Example Response (200 OK):
+# {
+#   "insights": {
+#     "summary": { "total_lent": "...", "total_repaid": "..." },
+#     "monthly_trends": [ { "month": "2026-06", "lent": "...", "borrowed": "..." } ],
+#     "top_debtors": [ ... ],
+#     "category_breakdown": [ ... ]
+#   }
+# }
+GET {{hostname}}/analytics/insights?period=6months HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# ──────────────────────────────────────────────
+# EXPORTS
+# ──────────────────────────────────────────────
+
+###
+# Download All Debts CSV
+# Response: Application/CSV File Download
+GET {{hostname}}/export/csv HTTP/1.1
+Authorization: Bearer {{accessToken}}
+
+###
+# Download All Debts PDF
+# Response: Application/PDF File Download
+GET {{hostname}}/export/pdf HTTP/1.1
+Authorization: Bearer {{accessToken}}
+
+###
+# ──────────────────────────────────────────────
+# SYNC ENGINE
+# ──────────────────────────────────────────────
+
+###
+# Get Sync Status
+# Example Response (200 OK):
+# {
+#   "sync": { "pending_count": 0, "conflict_count": 0, "conflicts": [], "last_synced_at": "..." }
+# }
+GET {{hostname}}/sync/status HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Pull Changes Since Last Sync
+# Query Parameter: since (ISO 8601 Date string)
+# Example Response (200 OK):
+# {
+#   "contacts": [ ...updated entities... ],
+#   "debts": [],
+#   "transactions": [],
+#   "reminders": [],
+#   "server_timestamp": "2026-06-07T12:00:00Z"
+# }
+GET {{hostname}}/sync/pull?since=2026-06-01T00:00:00Z HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Push Local Changes
+#
+# Validation Rules:
+# - changes: required, array, max:100
+# - changes.*.entity_type: required, in:contact,debt,transaction,reminder
+# - changes.*.action: required, in:CREATE,UPDATE,DELETE
+# - changes.*.client_id: required, uuid
+# - changes.*.client_timestamp: required, date
+# - changes.*.payload: required, array
+#
+# Example Response (200 OK):
+# {
+#   "message": "Sync push completed.",
+#   "results": { "success_count": 1, "conflicts": [] }
+# }
+POST {{hostname}}/sync/push HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "changes": [
+        {
+            "entity_type": "contact",
+            "action": "UPDATE",
+            "client_id": "{{contactId}}",
+            "client_timestamp": "2026-06-07T12:05:00Z",
+            "payload": {
+                "full_name": "Samuel L. Jackson"
+            }
+        }
+    ]
+}
+
+###
+# ──────────────────────────────────────────────
+# LEGACY ACCESS — SETTINGS
+# ──────────────────────────────────────────────
+
+###
+# Get Legacy Access Settings
+#
+# Example Response (200 OK):
+# {
+#   "settings": {
+#     "legacy_access_enabled": false,
+#     "legacy_waiting_period_days": 30,
+#     "has_recovery_code": false,
+#     "contacts_count": 0,
+#     "verified_contacts_count": 0
+#   }
+# }
+GET {{hostname}}/legacy/settings HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Enable Legacy Access
+#
+# ⚠️ The recovery_code is only shown ONCE. Save it immediately.
+#
+# Example Response (200 OK):
+# {
+#   "message": "Legacy Access has been enabled.",
+#   "recovery_code": "ABX9-2KF7-PQ11",
+#   "warning": "Save this recovery code. It will not be shown again."
+# }
+POST {{hostname}}/legacy/enable HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Disable Legacy Access
+#
+# Example Response (200 OK):
+# {
+#   "message": "Legacy Access has been disabled."
+# }
+POST {{hostname}}/legacy/disable HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Regenerate Recovery Code
+#
+# ⚠️ Old code is invalidated. New code is only shown ONCE.
+#
+# Example Response (200 OK):
+# {
+#   "message": "Recovery code has been regenerated.",
+#   "recovery_code": "XY12-AB34-CD56",
+#   "warning": "Save this recovery code. It will not be shown again."
+# }
+POST {{hostname}}/legacy/recovery-code/regenerate HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Update Waiting Period
+#
+# Validation Rules:
+# - waiting_period_days: required, integer, in:15,30,60,90
+#
+# Example Response (200 OK):
+# {
+#   "message": "Waiting period updated."
+# }
+PUT {{hostname}}/legacy/waiting-period HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "waiting_period_days": 30
+}
+
+###
+# ──────────────────────────────────────────────
+# LEGACY ACCESS — CONTACTS
+# ──────────────────────────────────────────────
+
+###
+# @name createLegacyContact
+#
+# Validation Rules:
+# - full_name: required, string, max:255
+# - email: required, email, max:255
+# - phone: required, string, max:20
+# - relationship: required, string, max:100
+# - is_primary: sometimes, boolean
+#
+# Relationship Examples: Spouse, Child, Parent, Sibling, Lawyer, Executor, Business Partner, Friend
+#
+# Example Response (201 Created):
+# {
+#   "message": "Legacy contact added. A verification email has been sent.",
+#   "contact": {
+#     "id": "uuid",
+#     "full_name": "Sarah Johnson",
+#     "email": "sarah@example.com",
+#     "verification_status": "PENDING"
+#   },
+#   "verification_token": "token_string..."
+# }
+@legacyContactId = {{createLegacyContact.response.body.contact.id}}
+@verificationToken = {{createLegacyContact.response.body.verification_token}}
+
+POST {{hostname}}/legacy-contacts HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "full_name": "Sarah Johnson",
+    "email": "sarah@example.com",
+    "phone": "+2348012345678",
+    "relationship": "Spouse",
+    "is_primary": true
+}
+
+###
+# List Legacy Contacts
+#
+# Query Parameters:
+# - per_page: int (default: 15)
+# - verification_status: PENDING | VERIFIED | REVOKED
+#
+# Example Response (200 OK):
+# {
+#   "data": [
+#     { "id": "uuid", "full_name": "Sarah Johnson", "verification_status": "PENDING", ... }
+#   ],
+#   "links": { ... },
+#   "meta": { ... }
+# }
+GET {{hostname}}/legacy-contacts?per_page=15 HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Get Single Legacy Contact
+#
+# Example Response (200 OK):
+# {
+#   "contact": {
+#     "id": "uuid",
+#     "full_name": "Sarah Johnson",
+#     "email": "sarah@example.com",
+#     "phone": "+2348012345678",
+#     "relationship": "Spouse",
+#     "is_primary": true,
+#     "verification_status": "PENDING",
+#     "verified_at": null,
+#     "access_requests_count": 0
+#   }
+# }
+GET {{hostname}}/legacy-contacts/{{legacyContactId}} HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Update Legacy Contact
+#
+# Validation Rules:
+# - All fields optional (same as Store)
+#
+# Example Response (200 OK):
+# {
+#   "message": "Legacy contact updated.",
+#   "contact": { ... }
+# }
+PATCH {{hostname}}/legacy-contacts/{{legacyContactId}} HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+Accept: application/json
+
+{
+    "relationship": "Executor",
+    "is_primary": false
+}
+
+###
+# Resend Verification Email
+#
+# Example Response (200 OK):
+# {
+#   "message": "Verification email has been resent.",
+#   "verification_token": "new_token_string..."
+# }
+POST {{hostname}}/legacy-contacts/{{legacyContactId}}/resend-verification HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Revoke Legacy Contact Verification
+#
+# Changes contact status from VERIFIED to REVOKED.
+#
+# Example Response (200 OK):
+# {
+#   "message": "Legacy contact verification has been revoked.",
+#   "contact": { "verification_status": "REVOKED", ... }
+# }
+POST {{hostname}}/legacy-contacts/{{legacyContactId}}/revoke HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Delete Legacy Contact
+#
+# Example Response (200 OK):
+# {
+#   "message": "Legacy contact removed."
+# }
+DELETE {{hostname}}/legacy-contacts/{{legacyContactId}} HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# ──────────────────────────────────────────────
+# LEGACY ACCESS — EMAIL VERIFICATION (Public)
+# ──────────────────────────────────────────────
+
+###
+# Verify Legacy Contact Email (No Auth Required)
+#
+# Validation Rules:
+# - email: required, email
+# - token: required, string
+#
+# Example Response (200 OK):
+# {
+#   "message": "Email verified successfully.",
+#   "contact": {
+#     "id": "uuid",
+#     "full_name": "Sarah Johnson",
+#     "verification_status": "VERIFIED",
+#     "verified_at": "2026-06-08T12:00:00.000000Z"
+#   }
+# }
+GET {{hostname}}/legacy-contacts/verify-email?email=sarah%40example.com&token={{verificationToken}} HTTP/1.1
+Accept: application/json
+
+###
+# ──────────────────────────────────────────────
+# LEGACY ACCESS — ACCESS REQUESTS
+# ──────────────────────────────────────────────
+
+###
+# @name submitAccessRequest
+#
+# Submit Legacy Access Request (No Auth Required)
+# Only verified legacy contacts may submit requests.
+#
+# Validation Rules:
+# - legacy_contact_id: required, uuid, exists:legacy_contacts,id
+# - reason: required, string, max:500
+# - recovery_code: nullable, string
+#
+# Reason Examples: Deceased, Permanent incapacity, Medical emergency
+#
+# Example Response (201 Created):
+# {
+#   "message": "Access request submitted. The account owner has been notified.",
+#   "access_request": {
+#     "id": "uuid",
+#     "status": "PENDING",
+#     "waiting_period_days": 30,
+#     "requested_at": "2026-06-08T12:00:00.000000Z",
+#     "expires_at": "2026-07-08T12:00:00.000000Z"
+#   }
+# }
+@accessRequestId = {{submitAccessRequest.response.body.access_request.id}}
+
+POST {{hostname}}/legacy-access-requests HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+
+{
+    "legacy_contact_id": "{{legacyContactId}}",
+    "reason": "Deceased",
+    "recovery_code": "ABX9-2KF7-PQ11"
+}
+
+###
+# List Access Requests (Owner)
+#
+# Query Parameters:
+# - per_page: int (default: 15)
+# - status: PENDING | APPROVED | DENIED | AUTO_APPROVED
+#
+# Example Response (200 OK):
+# {
+#   "data": [
+#     {
+#       "id": "uuid",
+#       "legacy_contact": { "full_name": "Sarah Johnson" },
+#       "reason": "Deceased",
+#       "status": "PENDING",
+#       "waiting_period_days": 30,
+#       "requested_at": "...",
+#       "expires_at": "..."
+#     }
+#   ],
+#   "links": { ... },
+#   "meta": { ... }
+# }
+GET {{hostname}}/legacy-access-requests?per_page=15 HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Get Single Access Request
+#
+# Example Response (200 OK):
+# {
+#   "access_request": {
+#     "id": "uuid",
+#     "legacy_contact": { "id": "uuid", "full_name": "Sarah Johnson", ... },
+#     "reason": "Deceased",
+#     "recovery_code_provided": true,
+#     "status": "PENDING",
+#     "status_label": "Pending",
+#     "grants_access": false,
+#     "waiting_period_days": 30,
+#     "requested_at": "...",
+#     "expires_at": "..."
+#   }
+# }
+GET {{hostname}}/legacy-access-requests/{{accessRequestId}} HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Approve Access Request (Owner)
+#
+# Example Response (200 OK):
+# {
+#   "message": "Access request approved. The legacy contact now has read-only access.",
+#   "access_request": {
+#     "status": "APPROVED",
+#     "grants_access": true,
+#     "approved_at": "2026-06-08T12:00:00.000000Z"
+#   }
+# }
+POST {{hostname}}/legacy-access-requests/{{accessRequestId}}/approve HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Deny Access Request (Owner)
+#
+# Example Response (200 OK):
+# {
+#   "message": "Access request denied.",
+#   "access_request": {
+#     "status": "DENIED",
+#     "grants_access": false,
+#     "denied_at": "2026-06-08T12:00:00.000000Z"
+#   }
+# }
+POST {{hostname}}/legacy-access-requests/{{accessRequestId}}/deny HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# ──────────────────────────────────────────────
+# LEGACY ACCESS — ESTATE REPORT (Public)
+# ──────────────────────────────────────────────
+
+###
+# Get Estate Report (Approved Requests Only)
+#
+# Returns the financial summary for the account owner.
+# Only accessible if the access request has been APPROVED or AUTO_APPROVED.
+#
+# Example Response (200 OK):
+# {
+#   "estate_report": {
+#     "account_owner": { "name": "Demo User", "email": "user@example.com" },
+#     "receivables": {
+#       "items": [
+#         { "contact_name": "John Doe", "amount": 50000, "currency": "NGN", "note": "Business Loan" }
+#       ],
+#       "total": 50000
+#     },
+#     "payables": {
+#       "items": [
+#         { "contact_name": "David", "amount": 25000, "currency": "NGN", "note": "Personal Loan" }
+#       ],
+#       "total": 25000
+#     },
+#     "net_position": 25000,
+#     "currency": "NGN",
+#     "generated_at": "2026-06-08T12:00:00.000000Z"
+#   }
+# }
+GET {{hostname}}/legacy-access-requests/{{accessRequestId}}/estate-report HTTP/1.1
+Accept: application/json
+
+###
+# ──────────────────────────────────────────────
+# LEGACY ACCESS — AUDIT LOGS
+# ──────────────────────────────────────────────
+
+###
+# List Audit Logs
+#
+# Query Parameters:
+# - per_page: int (default: 25)
+# - action: string (e.g., CONTACT_ADDED, ACCESS_REQUESTED, ACCESS_APPROVED, etc.)
+#
+# Action Values:
+# LEGACY_ACCESS_ENABLED, LEGACY_ACCESS_DISABLED, RECOVERY_CODE_REGENERATED,
+# WAITING_PERIOD_UPDATED, CONTACT_ADDED, CONTACT_UPDATED, CONTACT_REMOVED,
+# CONTACT_REVOKED, VERIFICATION_COMPLETED, VERIFICATION_RESENT,
+# ACCESS_REQUESTED, ACCESS_APPROVED, ACCESS_DENIED, ACCESS_AUTO_APPROVED,
+# ESTATE_REPORT_VIEWED
+#
+# Example Response (200 OK):
+# {
+#   "data": [
+#     {
+#       "id": "uuid",
+#       "action": "CONTACT_ADDED",
+#       "legacy_contact": { "id": "uuid", "full_name": "Sarah Johnson", "email": "sarah@example.com" },
+#       "metadata": { "contact_name": "Sarah Johnson", "contact_email": "sarah@example.com" },
+#       "created_at": "2026-06-08T12:00:00.000000Z"
+#     }
+#   ],
+#   "links": { ... },
+#   "meta": { ... }
+# }
+GET {{hostname}}/legacy/audit-logs?per_page=25 HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json
+
+###
+# Filter Audit Logs by Action
+GET {{hostname}}/legacy/audit-logs?action=ACCESS_REQUESTED HTTP/1.1
+Authorization: Bearer {{accessToken}}
+Accept: application/json

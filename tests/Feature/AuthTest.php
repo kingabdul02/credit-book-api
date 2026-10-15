@@ -6,6 +6,8 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class AuthTest extends TestCase
@@ -115,6 +117,52 @@ class AuthTest extends TestCase
 
         // Token should be revoked
         $this->assertDatabaseCount('personal_access_tokens', 0);
+    }
+
+    public function test_authenticated_user_can_upload_avatar(): void
+    {
+        Storage::fake('public');
+
+        $user = User::factory()->create();
+        $file = UploadedFile::fake()->image('profile.jpg', 200, 200);
+
+        $response = $this->actingAs($user)
+            ->postJson('/api/v1/auth/avatar', [
+                'avatar' => $file,
+            ]);
+
+        $response->assertOk()
+            ->assertJsonStructure([
+                'message',
+                'avatar_url',
+                'user' => ['id', 'name', 'avatar_url'],
+            ]);
+
+        $avatarUrl = $response->json('avatar_url');
+        $this->assertNotNull($avatarUrl);
+        $this->assertNotNull($user->fresh()->avatar_url);
+
+        $filename = basename($avatarUrl);
+        Storage::disk('public')->assertExists('avatars/' . $filename);
+    }
+
+    public function test_authenticated_user_can_delete_avatar(): void
+    {
+        Storage::fake('public');
+
+        $user = User::factory()->create([
+            'avatar_url' => 'http://localhost/storage/avatars/old_avatar.jpg',
+        ]);
+        Storage::disk('public')->put('avatars/old_avatar.jpg', 'fake content');
+
+        $response = $this->actingAs($user)
+            ->deleteJson('/api/v1/auth/avatar');
+
+        $response->assertOk()
+            ->assertJsonPath('user.avatar_url', null);
+
+        $this->assertNull($user->fresh()->avatar_url);
+        Storage::disk('public')->assertMissing('avatars/old_avatar.jpg');
     }
 
     public function test_unauthenticated_access_returns_401(): void

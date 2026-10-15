@@ -12,6 +12,7 @@ use App\Http\Resources\UserResource;
 use App\Services\AuthService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class AuthController extends Controller
 {
@@ -93,6 +94,7 @@ class AuthController extends Controller
     {
         $request->validate([
             'name' => ['sometimes', 'string', 'max:255'],
+            'email' => ['sometimes', 'nullable', 'email', 'max:255'],
             'default_currency' => ['sometimes', 'string', 'size:3'],
             'settings' => ['sometimes', 'array'],
             'avatar_url' => ['sometimes', 'nullable', 'string', 'max:500'],
@@ -100,12 +102,61 @@ class AuthController extends Controller
 
         $user = $this->authService->updateProfile(
             $request->user(),
-            $request->only(['name', 'default_currency', 'settings', 'avatar_url']),
+            $request->only(['name', 'email', 'default_currency', 'settings', 'avatar_url']),
         );
 
         return response()->json([
             'message' => 'Profile updated successfully.',
             'user' => new UserResource($user),
+        ]);
+    }
+
+    /**
+     * Upload or replace the user's avatar image.
+     */
+    public function uploadAvatar(Request $request): JsonResponse
+    {
+        $request->validate([
+            'avatar' => ['required', 'file', 'image', 'mimes:jpeg,png,jpg,webp', 'max:5120'],
+        ]);
+
+        $user = $request->user();
+
+        // Delete old local avatar if one exists
+        if ($user->avatar_url && str_contains($user->avatar_url, '/storage/avatars/')) {
+            $oldFilename = basename($user->avatar_url);
+            Storage::disk('public')->delete('avatars/' . $oldFilename);
+        }
+
+        $path = $request->file('avatar')->store('avatars', 'public');
+        $avatarUrl = asset('storage/' . $path);
+
+        $user->update(['avatar_url' => $avatarUrl]);
+
+        return response()->json([
+            'message' => 'Profile photo updated successfully.',
+            'avatar_url' => $avatarUrl,
+            'user' => new UserResource($user->fresh()),
+        ]);
+    }
+
+    /**
+     * Delete the user's avatar image.
+     */
+    public function deleteAvatar(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($user->avatar_url && str_contains($user->avatar_url, '/storage/avatars/')) {
+            $oldFilename = basename($user->avatar_url);
+            Storage::disk('public')->delete('avatars/' . $oldFilename);
+        }
+
+        $user->update(['avatar_url' => null]);
+
+        return response()->json([
+            'message' => 'Profile photo removed successfully.',
+            'user' => new UserResource($user->fresh()),
         ]);
     }
 
