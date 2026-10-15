@@ -171,4 +171,15 @@ class AuthTest extends TestCase
 
         $response->assertStatus(401);
     }
+
+    public function test_can_get_avatar_publicly(): void
+    {
+        Storage::fake('public');
+        Storage::disk('public')->put('avatars/sample.jpg', 'image-bytes');
+
+        $response = $this->get('/api/v1/avatars/sample.jpg');
+
+        $response->assertOk();
+    }
 }
+

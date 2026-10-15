@@ -112,6 +112,22 @@ class AuthController extends Controller
     }
 
     /**
+     * Serve a user avatar publicly.
+     * Bypasses web server symlink 403 restrictions by streaming directly via PHP.
+     */
+    public function getAvatar(string $filename)
+    {
+        $clean = basename($filename);
+        $path = 'avatars/' . $clean;
+
+        if (Storage::disk('public')->exists($path)) {
+            return Storage::disk('public')->response($path);
+        }
+
+        abort(404, 'Avatar not found');
+    }
+
+    /**
      * Upload or replace the user's avatar image.
      */
     public function uploadAvatar(Request $request): JsonResponse
@@ -123,13 +139,19 @@ class AuthController extends Controller
         $user = $request->user();
 
         // Delete old local avatar if one exists
-        if ($user->avatar_url && str_contains($user->avatar_url, '/storage/avatars/')) {
+        if ($user->avatar_url) {
             $oldFilename = basename($user->avatar_url);
             Storage::disk('public')->delete('avatars/' . $oldFilename);
         }
 
         $path = $request->file('avatar')->store('avatars', 'public');
-        $avatarUrl = asset('storage/' . $path);
+        $filename = basename($path);
+
+        // Generate full URL matching incoming request scheme & host,
+        // using the direct /api/v1/avatars endpoint to bypass LiteSpeed/Nginx symlink 403 restrictions.
+        $scheme = $request->isSecure() ? 'https' : ($request->header('X-Forwarded-Proto') ?? $request->getScheme());
+        $host = $request->getHttpHost();
+        $avatarUrl = "{$scheme}://{$host}/api/v1/avatars/{$filename}";
 
         $user->update(['avatar_url' => $avatarUrl]);
 
@@ -147,7 +169,7 @@ class AuthController extends Controller
     {
         $user = $request->user();
 
-        if ($user->avatar_url && str_contains($user->avatar_url, '/storage/avatars/')) {
+        if ($user->avatar_url) {
             $oldFilename = basename($user->avatar_url);
             Storage::disk('public')->delete('avatars/' . $oldFilename);
         }

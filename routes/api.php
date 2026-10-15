@@ -37,6 +37,10 @@ Route::prefix('v1')->group(function () {
             ->middleware('throttle:10,1');
     });
 
+    // Public avatar image route (bypasses LiteSpeed symlink 403 restrictions)
+    Route::get('avatars/{filename}', [AuthController::class, 'getAvatar'])
+        ->where('filename', '[a-zA-Z0-9_\-\.]+');
+
     // ──────────────────────────────────────────────
     // Public Legacy Access Routes
     // ──────────────────────────────────────────────
