@@ -9,6 +9,8 @@ use App\Http\Requests\Reminder\StoreReminderRequest;
 use App\Http\Requests\Reminder\UpdateReminderRequest;
 use App\Http\Resources\ReminderResource;
 use App\Models\Reminder;
+use App\Services\NotificationService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -39,9 +41,22 @@ class ReminderController extends Controller
             ...$request->validated(),
         ]);
 
+        $reminder->load('debt.contact');
+        $contactName = $reminder->debt?->contact?->full_name ?? 'Contact';
+        $remindAt = Carbon::parse($reminder->remind_at)->format('M d, Y h:i A');
+
+        NotificationService::log(
+            user: $request->user(),
+            title: 'Payment Reminder Scheduled ⏰',
+            message: "Reminder set for {$contactName} on {$remindAt} ({$reminder->type_label}).",
+            category: 'dueSoon',
+            actionRoute: $reminder->debt?->contact_id ? "/ledger/{$reminder->debt->contact_id}" : '/all-debts',
+            actionData: ['reminder_id' => $reminder->id, 'debt_id' => $reminder->debt_id]
+        );
+
         return response()->json([
             'message' => 'Reminder created successfully.',
-            'reminder' => new ReminderResource($reminder->load('debt.contact')),
+            'reminder' => new ReminderResource($reminder),
         ], 201);
     }
 
@@ -64,8 +79,17 @@ class ReminderController extends Controller
      */
     public function destroy(Request $request, string $id): JsonResponse
     {
-        $reminder = Reminder::forUser($request->user()->id)->findOrFail($id);
+        $reminder = Reminder::forUser($request->user()->id)->with('debt.contact')->findOrFail($id);
+        $contactName = $reminder->debt?->contact?->full_name ?? 'Contact';
         $reminder->delete();
+
+        NotificationService::log(
+            user: $request->user(),
+            title: 'Reminder Cancelled',
+            message: "Cancelled scheduled reminder for {$contactName}.",
+            category: 'dueSoon',
+            actionRoute: '/all-debts',
+        );
 
         return response()->json([
             'message' => 'Reminder deleted successfully.',

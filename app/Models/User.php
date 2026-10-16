@@ -88,6 +88,11 @@ class User extends Authenticatable
         return $this->hasMany(LegacyContact::class);
     }
 
+    public function appNotifications(): HasMany
+    {
+        return $this->hasMany(Notification::class);
+    }
+
     public function legacyAccessRequests(): HasMany
     {
         return $this->hasMany(LegacyAccessRequest::class);

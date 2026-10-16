@@ -125,7 +125,7 @@ class LegacyTest extends TestCase
         $unauthorized = $this->getJson("/api/v1/legacy-access-requests/{$request->id}/estate-report");
         $unauthorized->assertStatus(403);
 
-        // Attempt with valid access code header -> 200
+        // Attempt with valid access code header by nominee -> 200
         $authorized = $this->withHeader('X-Access-Code', 'XYZ98765')
             ->getJson("/api/v1/legacy-access-requests/{$request->id}/estate-report");
         $authorized->assertStatus(200);
@@ -137,5 +137,115 @@ class LegacyTest extends TestCase
                 'net_position',
             ],
         ]);
+    }
+
+    public function test_approver_cannot_view_nominee_estate_report(): void
+    {
+        $user = User::factory()->create([
+            'legacy_access_enabled' => true,
+        ]);
+
+        $contact = LegacyContact::create([
+            'user_id' => $user->id,
+            'full_name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '+2348012345678',
+            'relationship' => 'Spouse',
+            'is_primary' => true,
+            'verification_status' => VerificationStatus::VERIFIED,
+            'access_code' => 'XYZ98765',
+        ]);
+
+        $request = LegacyAccessRequest::create([
+            'user_id' => $user->id,
+            'legacy_contact_id' => $contact->id,
+            'reason' => 'Medical Emergency',
+            'recovery_code_provided' => false,
+            'status' => AccessRequestStatus::APPROVED,
+            'waiting_period_days' => 30,
+            'requested_at' => now(),
+            'approved_at' => now(),
+        ]);
+
+        // When the approver (account owner) attempts to access the report -> 403 Forbidden
+        Sanctum::actingAs($user);
+        $approverAttempt = $this->withHeader('X-Access-Code', 'XYZ98765')
+            ->getJson("/api/v1/legacy-access-requests/{$request->id}/estate-report");
+        $approverAttempt->assertStatus(403);
+        $approverAttempt->assertJson([
+            'message' => 'Unauthorized. The estate report is exclusively accessible to the requesting nominee, not the account approver.',
+        ]);
+    }
+
+    public function test_verify_email_returns_json_for_api_client(): void
+    {
+        $user = User::factory()->create();
+        $token = 'test-token-12345';
+        $contact = LegacyContact::create([
+            'user_id' => $user->id,
+            'full_name' => 'John Doe',
+            'email' => 'john@example.com',
+            'phone' => '+2348012345678',
+            'relationship' => 'Sibling',
+            'verification_status' => VerificationStatus::PENDING,
+            'verification_token' => Hash::make($token),
+            'access_code' => 'CODE1234',
+        ]);
+
+        $response = $this->getJson("/api/v1/legacy-contacts/verify-email?email=john@example.com&token={$token}");
+        $response->assertStatus(200);
+        $response->assertJson([
+            'message' => 'Email verified successfully.',
+            'contact' => [
+                'email' => 'john@example.com',
+                'verification_status' => 'VERIFIED',
+            ],
+        ]);
+    }
+
+    public function test_verify_email_returns_html_view_for_browser_client(): void
+    {
+        $user = User::factory()->create(['name' => 'Owner Name']);
+        $token = 'browser-token-12345';
+        $contact = LegacyContact::create([
+            'user_id' => $user->id,
+            'full_name' => 'Jane Nominee',
+            'email' => 'jane.nominee@example.com',
+            'phone' => '+2348012345678',
+            'relationship' => 'Spouse',
+            'verification_status' => VerificationStatus::PENDING,
+            'verification_token' => Hash::make($token),
+            'access_code' => 'SECURE99',
+        ]);
+
+        $response = $this->withHeader('Accept', 'text/html,application/xhtml+xml')
+            ->get("/api/v1/legacy-contacts/verify-email?email=jane.nominee@example.com&token={$token}");
+
+        $response->assertStatus(200);
+        $response->assertSee('Email Verified');
+        $response->assertSee('SECURE99');
+        $response->assertSee('Jane Nominee');
+    }
+
+    public function test_verify_email_is_idempotent_when_visited_again(): void
+    {
+        $user = User::factory()->create();
+        $contact = LegacyContact::create([
+            'user_id' => $user->id,
+            'full_name' => 'Verified Nominee',
+            'email' => 'verified@example.com',
+            'phone' => '+2348012345678',
+            'relationship' => 'Friend',
+            'verification_status' => VerificationStatus::VERIFIED,
+            'verified_at' => now(),
+            'access_code' => 'ALREADY1',
+        ]);
+
+        $response = $this->withHeader('Accept', 'text/html,application/xhtml+xml')
+            ->get("/api/v1/legacy-contacts/verify-email?email=verified@example.com&token=dummy-token");
+
+        $response->assertStatus(200);
+        $response->assertSee('Email Verified');
+        $response->assertSee('ALREADY1');
     }
 }

@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\DebtController;
 use App\Http\Controllers\Api\V1\ExportController;
 use App\Http\Controllers\Api\V1\LegacyAccessRequestController;
 use App\Http\Controllers\Api\V1\LegacyContactController;
+use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\ReminderController;
 use App\Http\Controllers\Api\V1\SyncController;
 use App\Http\Controllers\Api\V1\TransactionController;
@@ -116,6 +117,15 @@ Route::prefix('v1')->group(function () {
         Route::prefix('analytics')->group(function () {
             Route::get('dashboard', [AnalyticsController::class, 'dashboard']);
             Route::get('insights', [AnalyticsController::class, 'insights']);
+        });
+
+        // Notifications
+        Route::prefix('notifications')->group(function () {
+            Route::get('/', [NotificationController::class, 'index']);
+            Route::patch('{id}/read', [NotificationController::class, 'markAsRead']);
+            Route::post('read-all', [NotificationController::class, 'markAllAsRead']);
+            Route::delete('{id}', [NotificationController::class, 'destroy']);
+            Route::delete('/', [NotificationController::class, 'clearAll']);
         });
 
         // Export

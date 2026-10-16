@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Sync\PushSyncRequest;
+use App\Services\NotificationService;
 use App\Services\SyncService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,10 +22,22 @@ class SyncController extends Controller
      */
     public function push(PushSyncRequest $request): JsonResponse
     {
+        $changes = $request->validated('changes');
         $results = $this->syncService->push(
             $request->user()->id,
-            $request->validated('changes'),
+            $changes,
         );
+
+        $changesCount = count($changes);
+        if ($changesCount > 0) {
+            NotificationService::log(
+                user: $request->user(),
+                title: 'Data Synced 🔄',
+                message: "Successfully synchronized {$changesCount} offline change" . ($changesCount > 1 ? 's' : '') . " with the server.",
+                category: 'system',
+                actionRoute: '/home',
+            );
+        }
 
         return response()->json([
             'message' => 'Sync push completed.',

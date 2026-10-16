@@ -10,6 +10,7 @@ use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Http\Resources\UserResource;
 use App\Services\AuthService;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -27,6 +28,14 @@ class AuthController extends Controller
     public function register(RegisterRequest $request): JsonResponse
     {
         $result = $this->authService->register($request->validated());
+
+        NotificationService::log(
+            user: $result['user'],
+            title: 'Welcome to CreditBook! 🎉',
+            message: 'Your account is ready. Start tracking debts, recording payments, and secure your financial ledger.',
+            category: 'system',
+            actionRoute: '/home',
+        );
 
         return response()->json([
             'message' => 'Account created successfully.',
@@ -210,6 +219,14 @@ class AuthController extends Controller
 
         $user->update(['avatar_url' => $avatarUrl]);
 
+        NotificationService::log(
+            user: $user,
+            title: 'Profile Photo Updated',
+            message: 'Your profile photo has been successfully updated.',
+            category: 'system',
+            actionRoute: '/settings',
+        );
+
         return response()->json([
             'message' => 'Profile photo updated successfully.',
             'avatar_url' => $avatarUrl,
@@ -248,6 +265,14 @@ class AuthController extends Controller
 
         $this->authService->setLoginPin($request->user(), $request->input('pin'));
 
+        NotificationService::log(
+            user: $request->user(),
+            title: 'Security Alert: Login PIN Set 🔒',
+            message: 'Your 6-digit login PIN was set successfully.',
+            category: 'system',
+            actionRoute: '/settings',
+        );
+
         return response()->json([
             'message' => 'Login PIN set successfully.',
         ]);
@@ -263,6 +288,14 @@ class AuthController extends Controller
         ]);
 
         $this->authService->setTransactionPin($request->user(), $request->input('pin'));
+
+        NotificationService::log(
+            user: $request->user(),
+            title: 'Security Alert: Transaction PIN Set 🔒',
+            message: 'Your 4-digit transaction PIN was set successfully.',
+            category: 'system',
+            actionRoute: '/settings',
+        );
 
         return response()->json([
             'message' => 'Transaction PIN set successfully.',

@@ -10,6 +10,7 @@ use App\Http\Resources\LegacyAccessRequestResource;
 use App\Models\LegacyAccessRequest;
 use App\Models\LegacyContact;
 use App\Services\LegacyAccessService;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -118,6 +119,16 @@ class LegacyAccessRequestController extends Controller
                     $validatedData,
                 );
 
+                // Notify account owner of access request
+                NotificationService::log(
+                    user: $contact->user_id,
+                    title: 'Estate Access Requested! ⚠️',
+                    message: "{$contact->full_name} has submitted an access request for your financial records. Review in Nominees settings.",
+                    category: 'legacy',
+                    actionRoute: '/next-of-kin',
+                    actionData: ['request_id' => $accessRequest->id, 'contact_id' => $contact->id]
+                );
+
                 return response()->json([
                     'message' => 'Access request submitted. The account owner has been notified.',
                     'access_request' => new LegacyAccessRequestResource($accessRequest),
@@ -169,7 +180,7 @@ class LegacyAccessRequestController extends Controller
      */
     public function approve(Request $request, string $id): JsonResponse
     {
-        $accessRequest = LegacyAccessRequest::forUser($request->user()->id)->findOrFail($id);
+        $accessRequest = LegacyAccessRequest::forUser($request->user()->id)->with('legacyContact')->findOrFail($id);
 
         if ($accessRequest->status->value !== 'PENDING') {
             return response()->json([
@@ -178,6 +189,16 @@ class LegacyAccessRequestController extends Controller
         }
 
         $updated = $this->legacyAccessService->approveRequest($accessRequest);
+        $contactName = $accessRequest->legacyContact?->full_name ?? 'Nominee';
+
+        NotificationService::log(
+            user: $request->user(),
+            title: 'Estate Access Approved',
+            message: "You approved estate records access for {$contactName}.",
+            category: 'legacy',
+            actionRoute: '/next-of-kin',
+            actionData: ['request_id' => $accessRequest->id]
+        );
 
         return response()->json([
             'message' => 'Access request approved. The legacy contact now has read-only access.',
@@ -190,7 +211,7 @@ class LegacyAccessRequestController extends Controller
      */
     public function deny(Request $request, string $id): JsonResponse
     {
-        $accessRequest = LegacyAccessRequest::forUser($request->user()->id)->findOrFail($id);
+        $accessRequest = LegacyAccessRequest::forUser($request->user()->id)->with('legacyContact')->findOrFail($id);
 
         if ($accessRequest->status->value !== 'PENDING') {
             return response()->json([
@@ -199,6 +220,16 @@ class LegacyAccessRequestController extends Controller
         }
 
         $updated = $this->legacyAccessService->denyRequest($accessRequest);
+        $contactName = $accessRequest->legacyContact?->full_name ?? 'Nominee';
+
+        NotificationService::log(
+            user: $request->user(),
+            title: 'Estate Access Denied',
+            message: "You denied estate records access for {$contactName}.",
+            category: 'legacy',
+            actionRoute: '/next-of-kin',
+            actionData: ['request_id' => $accessRequest->id]
+        );
 
         return response()->json([
             'message' => 'Access request denied.',
@@ -221,9 +252,14 @@ class LegacyAccessRequestController extends Controller
             ], 403);
         }
 
-        // Security safeguard: Ensure requester is authorized
+        // Security safeguard: The approver (account owner) cannot view this via the nominee estate report endpoint.
+        // It is strictly for the authorized nominee who requested access.
         $user = $request->user();
-        $isOwner = $user && $user->id === $accessRequest->user_id;
+        if ($user && $user->id === $accessRequest->user_id) {
+            return response()->json([
+                'message' => 'Unauthorized. The estate report is exclusively accessible to the requesting nominee, not the account approver.',
+            ], 403);
+        }
 
         $accessCode = $request->header('X-Access-Code') ?: $request->input('access_code');
         $recoveryCode = $request->header('X-Recovery-Code') ?: $request->input('recovery_code');
@@ -232,9 +268,9 @@ class LegacyAccessRequestController extends Controller
         $isValidRecoveryCode = $recoveryCode && $accessRequest->user->legacy_recovery_code_hash && \Illuminate\Support\Facades\Hash::check(trim($recoveryCode), $accessRequest->user->legacy_recovery_code_hash);
         $wasRecoveryAuthorized = $accessRequest->recovery_code_provided;
 
-        if (! $isOwner && ! $isValidAccessCode && ! $isValidRecoveryCode && ! $wasRecoveryAuthorized) {
+        if (! $isValidAccessCode && ! $isValidRecoveryCode && ! $wasRecoveryAuthorized) {
             return response()->json([
-                'message' => 'Unauthorized. A valid access code or recovery code is required to view this estate report.',
+                'message' => 'Unauthorized. Only the authorized nominee with a valid access code or recovery code can view this estate report.',
             ], 403);
         }
 

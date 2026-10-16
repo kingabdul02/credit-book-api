@@ -9,6 +9,7 @@ use App\Http\Requests\Debt\StoreDebtRequest;
 use App\Http\Requests\Debt\UpdateDebtRequest;
 use App\Http\Resources\DebtResource;
 use App\Services\DebtService;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -181,7 +182,18 @@ class DebtController extends Controller
     public function destroy(Request $request, string $id): JsonResponse
     {
         $debt = $this->debtService->find($id, $request->user()->id);
+        $contactName = $debt->contact?->full_name ?? 'Contact';
+        $amount = number_format((float) $debt->original_amount, 2);
+
         $this->debtService->delete($debt);
+
+        NotificationService::log(
+            user: $request->user(),
+            title: 'Debt Record Deleted',
+            message: "Removed debt record of ₦{$amount} for {$contactName}.",
+            category: 'debt',
+            actionRoute: '/all-debts',
+        );
 
         return response()->json([
             'message' => 'Debt deleted successfully.',

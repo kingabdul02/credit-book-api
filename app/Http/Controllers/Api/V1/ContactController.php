@@ -9,6 +9,7 @@ use App\Http\Requests\Contact\StoreContactRequest;
 use App\Http\Requests\Contact\UpdateContactRequest;
 use App\Http\Resources\ContactResource;
 use App\Models\Contact;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -49,6 +50,15 @@ class ContactController extends Controller
             'user_id' => $request->user()->id,
             ...$request->validated(),
         ]);
+
+        NotificationService::log(
+            user: $request->user(),
+            title: 'Contact Added 👤',
+            message: "{$contact->full_name} was added to your contacts.",
+            category: 'system',
+            actionRoute: "/ledger/{$contact->id}",
+            actionData: ['contact_id' => $contact->id]
+        );
 
         return response()->json([
             'message' => 'Contact created successfully.',

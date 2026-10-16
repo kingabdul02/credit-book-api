@@ -9,6 +9,7 @@ use App\Enums\LedgerType;
 use App\Enums\TransactionType;
 use App\Models\Contact;
 use App\Models\Debt;
+use App\Services\NotificationService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 
@@ -97,7 +98,23 @@ class DebtService
             );
 
             // Increment contact usage count
-            Contact::find($data['contact_id'])?->incrementUsage();
+            $contact = Contact::find($data['contact_id']);
+            $contact?->incrementUsage();
+
+            $contactName = $contact?->full_name ?? 'Contact';
+            $formattedAmount = number_format((float) $data['amount'], 2);
+            $typeDesc = (isset($data['transaction_type']) && ($data['transaction_type'] === TransactionType::THEY_OWE_ME->value || $data['transaction_type'] === TransactionType::THEY_OWE_ME))
+                ? "lent to {$contactName}"
+                : "borrowed from {$contactName}";
+
+            NotificationService::log(
+                user: $userId,
+                title: 'New Debt Recorded',
+                message: "Recorded ₦{$formattedAmount} {$typeDesc}.",
+                category: 'debt',
+                actionRoute: "/ledger/{$data['contact_id']}",
+                actionData: ['debt_id' => $debt->id, 'contact_id' => $data['contact_id'], 'amount' => $data['amount']]
+            );
 
             return $debt->load(['contact', 'transactions']);
         });
@@ -165,6 +182,31 @@ class DebtService
 
             $debt->save();
 
+            $contactName = $debt->contact?->full_name ?? 'Contact';
+            $formattedPayment = number_format((float) $data['amount'], 2);
+            $remaining = bcsub((string) $debt->original_amount, (string) $newPaidAmount, 2);
+
+            if ($comparison >= 0) {
+                NotificationService::log(
+                    user: $userId,
+                    title: 'Debt Settled! 🎉',
+                    message: "Debt with {$contactName} has been fully settled with payment of ₦{$formattedPayment}.",
+                    category: 'payment',
+                    actionRoute: $debt->contact_id ? "/ledger/{$debt->contact_id}" : '/all-debts',
+                    actionData: ['debt_id' => $debt->id, 'contact_id' => $debt->contact_id]
+                );
+            } else {
+                $formattedRemaining = number_format((float) max(0, (float) $remaining), 2);
+                NotificationService::log(
+                    user: $userId,
+                    title: 'Payment Recorded 💳',
+                    message: "Recorded payment of ₦{$formattedPayment} for {$contactName}. Remaining balance: ₦{$formattedRemaining}.",
+                    category: 'payment',
+                    actionRoute: $debt->contact_id ? "/ledger/{$debt->contact_id}" : '/all-debts',
+                    actionData: ['debt_id' => $debt->id, 'contact_id' => $debt->contact_id]
+                );
+            }
+
             return $debt->fresh(['contact', 'transactions']);
         });
     }
@@ -198,6 +240,19 @@ class DebtService
             }
 
             $debt->save();
+
+            $contactName = $debt->contact?->full_name ?? 'Contact';
+            $formattedAdditional = number_format((float) $data['amount'], 2);
+            $formattedNewTotal = number_format((float) $debt->original_amount, 2);
+
+            NotificationService::log(
+                user: $userId,
+                title: 'Debt Increased',
+                message: "Added ₦{$formattedAdditional} to {$contactName}'s debt balance. New total: ₦{$formattedNewTotal}.",
+                category: 'debt',
+                actionRoute: $debt->contact_id ? "/ledger/{$debt->contact_id}" : '/all-debts',
+                actionData: ['debt_id' => $debt->id, 'contact_id' => $debt->contact_id]
+            );
 
             return $debt->fresh(['contact', 'transactions']);
         });

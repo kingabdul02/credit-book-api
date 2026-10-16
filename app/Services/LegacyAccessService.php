@@ -14,6 +14,7 @@ use App\Models\User;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
@@ -146,9 +147,19 @@ class LegacyAccessService
             'contact_name' => $contact->full_name,
             'contact_email' => $contact->email,
         ]);
+        $contact->setRelation('user', $user);
 
-        // Dispatch email verification notification to the contact
-        Mail::to($contact->email)->queue(new LegacyContactVerificationMail($contact, $verificationToken, $accessCode));
+        // Send email verification notification to the contact
+        try {
+            Mail::to($contact->email)->send(new LegacyContactVerificationMail($contact, $verificationToken, $accessCode));
+        } catch (\Throwable $e) {
+            Log::error('Failed to send legacy contact verification email: ' . $e->getMessage(), [
+                'contact_id' => $contact->id,
+                'email' => $contact->email,
+                'exception' => $e,
+            ]);
+        }
+
         return [
             'contact' => $contact,
             'verification_token' => $verificationToken,
@@ -167,7 +178,7 @@ class LegacyAccessService
             'phone' => $data['phone'] ?? null,
             'relationship' => $data['relationship'] ?? null,
             'is_primary' => $data['is_primary'] ?? null,
-        ], fn ($value) => $value !== null));
+        ], fn($value) => $value !== null));
 
         $this->logAction($contact->user_id, $contact->id, 'CONTACT_UPDATED');
 
@@ -209,6 +220,16 @@ class LegacyAccessService
             }
         }
 
+        // If the contact was already verified, return it idempotently
+        $alreadyVerified = LegacyContact::where('email', $email)
+            ->where('verification_status', VerificationStatus::VERIFIED)
+            ->latest('verified_at')
+            ->first();
+
+        if ($alreadyVerified) {
+            return $alreadyVerified;
+        }
+
         abort(404, 'Invalid verification token or email address.');
     }
 
@@ -243,10 +264,18 @@ class LegacyAccessService
             'access_code' => $accessCode,
         ]);
 
-        $this->logAction($contact->user_id, $contact->id, 'VERIFICATION_RESENT');
+        $contact->loadMissing('user');
 
-        // TODO: Dispatch email verification notification
-        // Mail::to($contact->email)->queue(new LegacyContactVerificationMail($contact, $verificationToken, $accessCode));
+        // Send email verification notification
+        try {
+            Mail::to($contact->email)->send(new LegacyContactVerificationMail($contact, $verificationToken, $accessCode));
+        } catch (\Throwable $e) {
+            Log::error('Failed to resend legacy contact verification email: ' . $e->getMessage(), [
+                'contact_id' => $contact->id,
+                'email' => $contact->email,
+                'exception' => $e,
+            ]);
+        }
 
         return [
             'verification_token' => $verificationToken,
@@ -264,7 +293,7 @@ class LegacyAccessService
     public function submitAccessRequestByCode(string $accessCode, array $data): LegacyAccessRequest
     {
         $contact = LegacyContact::findByAccessCode($accessCode);
-        
+
         if (!$contact) {
             abort(404, 'Invalid access code.');
         }
@@ -286,7 +315,7 @@ class LegacyAccessService
         }
 
         // Ensure the account owner has Legacy Access enabled
-        if (! $user->legacy_access_enabled) {
+        if (!$user->legacy_access_enabled) {
             $user->update(['legacy_access_enabled' => true]);
         }
 
@@ -320,7 +349,7 @@ class LegacyAccessService
 
         // Check if a recovery code was provided and if it's valid
         $recoveryCodeProvided = !empty($data['recovery_code_provided']);
-        if (! $recoveryCodeProvided && ! empty($data['recovery_code']) && $user->legacy_recovery_code_hash) {
+        if (!$recoveryCodeProvided && !empty($data['recovery_code']) && $user->legacy_recovery_code_hash) {
             $recoveryCodeProvided = Hash::check($data['recovery_code'], $user->legacy_recovery_code_hash);
         }
 
@@ -458,7 +487,7 @@ class LegacyAccessService
             ->whereNotIn('status', ['PAID'])
             ->with('contact:id,full_name')
             ->get()
-            ->map(fn ($debt) => [
+            ->map(fn($debt) => [
                 'contact_name' => $debt->contact?->full_name ?? 'Unknown',
                 'amount' => $debt->original_amount - $debt->paid_amount,
                 'currency' => $debt->currency,
@@ -471,7 +500,7 @@ class LegacyAccessService
             ->whereNotIn('status', ['PAID'])
             ->with('contact:id,full_name')
             ->get()
-            ->map(fn ($debt) => [
+            ->map(fn($debt) => [
                 'contact_name' => $debt->contact?->full_name ?? 'Unknown',
                 'amount' => $debt->original_amount - $debt->paid_amount,
                 'currency' => $debt->currency,
@@ -534,7 +563,7 @@ class LegacyAccessService
             'user_id' => $userId,
             'legacy_contact_id' => $contactId,
             'action' => $action,
-            'metadata' => ! empty($metadata) ? $metadata : null,
+            'metadata' => !empty($metadata) ? $metadata : null,
             'created_at' => now(),
         ]);
     }
