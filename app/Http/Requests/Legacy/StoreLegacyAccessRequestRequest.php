@@ -16,8 +16,8 @@ class StoreLegacyAccessRequestRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'access_code' => ['nullable', 'string', 'size:8', 'regex:/^[A-Z2-9]+$/'],
-            'reason' => ['required', 'string', 'max:500'],
+            'access_code' => ['nullable', 'string', 'size:8', 'regex:/^[A-Za-z0-9]+$/'],
+            'reason' => ['nullable', 'string', 'max:500'],
             'recovery_code' => ['nullable', 'string'],
         ];
     }

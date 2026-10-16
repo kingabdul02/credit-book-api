@@ -35,6 +35,8 @@ Route::prefix('v1')->group(function () {
             ->middleware('throttle:10,1');
         Route::post('google', [AuthController::class, 'google'])
             ->middleware('throttle:10,1');
+        Route::post('refresh', [AuthController::class, 'refresh'])
+            ->middleware('throttle:30,1');
     });
 
     // Public avatar image route (bypasses LiteSpeed symlink 403 restrictions)

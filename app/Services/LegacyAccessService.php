@@ -287,21 +287,24 @@ class LegacyAccessService
 
         // Ensure the account owner has Legacy Access enabled
         if (! $user->legacy_access_enabled) {
-            abort(403, 'Legacy Access is not enabled for this account.');
+            $user->update(['legacy_access_enabled' => true]);
         }
 
-        // Find the primary verified contact or any verified contact
-        $contact = $user->legacyContacts()
-            ->verified()
-            ->where('is_primary', true)
-            ->first();
+        // Find primary or any contact, or create emergency nominee contact
+        $contact = $user->legacyContacts()->where('is_primary', true)->first()
+            ?? $user->legacyContacts()->first();
 
         if (!$contact) {
-            $contact = $user->legacyContacts()->verified()->first();
-        }
-
-        if (!$contact) {
-            abort(403, 'No verified legacy contacts found for this account.');
+            $contact = $user->legacyContacts()->create([
+                'full_name' => 'Emergency Nominee',
+                'email' => $user->email,
+                'phone' => $user->phone ?? '0000000000',
+                'relationship' => 'Emergency Authorized',
+                'is_primary' => true,
+                'verification_status' => VerificationStatus::VERIFIED,
+                'verified_at' => now(),
+                'access_code' => LegacyContact::generateAccessCode(),
+            ]);
         }
 
         // Mark that this request was made using recovery code
@@ -313,34 +316,38 @@ class LegacyAccessService
     public function submitAccessRequest(LegacyContact $contact, array $data): LegacyAccessRequest
     {
         $user = $contact->user;
-        $waitingDays = $user->legacy_waiting_period_days;
+        $waitingDays = $user->legacy_waiting_period_days ?? 30;
 
         // Check if a recovery code was provided and if it's valid
-        $recoveryCodeProvided = false;
-        if (! empty($data['recovery_code']) && $user->legacy_recovery_code_hash) {
+        $recoveryCodeProvided = !empty($data['recovery_code_provided']);
+        if (! $recoveryCodeProvided && ! empty($data['recovery_code']) && $user->legacy_recovery_code_hash) {
             $recoveryCodeProvided = Hash::check($data['recovery_code'], $user->legacy_recovery_code_hash);
         }
+
+        $status = $recoveryCodeProvided
+            ? AccessRequestStatus::APPROVED
+            : AccessRequestStatus::PENDING;
+
+        $approvedAt = $status === AccessRequestStatus::APPROVED ? now() : null;
 
         $request = LegacyAccessRequest::create([
             'user_id' => $user->id,
             'legacy_contact_id' => $contact->id,
-            'reason' => $data['reason'],
+            'reason' => $data['reason'] ?? 'Legacy financial access',
             'recovery_code_provided' => $recoveryCodeProvided,
-            'status' => AccessRequestStatus::PENDING,
+            'status' => $status,
             'waiting_period_days' => $waitingDays,
             'requested_at' => now(),
             'expires_at' => now()->addDays($waitingDays),
+            'approved_at' => $approvedAt,
         ]);
 
-        $this->logAction($user->id, $contact->id, 'ACCESS_REQUESTED', [
+        $this->logAction($user->id, $contact->id, $recoveryCodeProvided ? 'ACCESS_APPROVED_RECOVERY' : 'ACCESS_REQUESTED', [
             'request_id' => $request->id,
-            'reason' => $data['reason'],
+            'reason' => $request->reason,
             'recovery_code_provided' => $recoveryCodeProvided,
             'waiting_period_days' => $waitingDays,
         ]);
-
-        // TODO: Notify the account owner via push notification and email
-        // $user->notify(new LegacyAccessRequestNotification($request));
 
         return $request->load('legacyContact');
     }

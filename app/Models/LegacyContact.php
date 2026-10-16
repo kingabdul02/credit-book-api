@@ -99,6 +99,22 @@ class LegacyContact extends Model
     }
 
     /**
+     * Check if this contact is revoked.
+     */
+    public function isRevoked(): bool
+    {
+        return $this->verification_status === VerificationStatus::REVOKED;
+    }
+
+    /**
+     * Check if this contact is pending verification.
+     */
+    public function isPending(): bool
+    {
+        return $this->verification_status === VerificationStatus::PENDING;
+    }
+
+    /**
      * Check if this contact has an approved access request.
      */
     public function hasApprovedAccess(): bool

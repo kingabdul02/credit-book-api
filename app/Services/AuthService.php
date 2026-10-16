@@ -8,9 +8,38 @@ use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\ValidationException;
+use Laravel\Sanctum\PersonalAccessToken;
 
 class AuthService
 {
+    /**
+     * Issue both an access token and a refresh token for the user.
+     */
+    public function issueTokens(User $user, string $deviceName = 'mobile-app'): array
+    {
+        // Access token expires in 2 hours
+        $accessToken = $user->createToken(
+            $deviceName . '-access',
+            ['access-api', '*'],
+            now()->addHours(2)
+        )->plainTextToken;
+
+        // Refresh token expires in 30 days
+        $refreshToken = $user->createToken(
+            $deviceName . '-refresh',
+            ['issue-access-token'],
+            now()->addDays(30)
+        )->plainTextToken;
+
+        return [
+            'token' => $accessToken,
+            'access_token' => $accessToken,
+            'refresh_token' => $refreshToken,
+            'token_type' => 'Bearer',
+            'expires_in' => 7200,
+        ];
+    }
+
     /**
      * Register a new user with name and phone number.
      */
@@ -22,14 +51,11 @@ class AuthService
             'default_currency' => $data['currency'] ?? 'NGN',
         ]);
 
-        $token = $user->createToken(
-            $data['device_name'] ?? 'mobile-app'
-        )->plainTextToken;
+        $tokens = $this->issueTokens($user, $data['device_name'] ?? 'mobile-app');
 
-        return [
+        return array_merge([
             'user' => $user,
-            'token' => $token,
-        ];
+        ], $tokens);
     }
 
     /**
@@ -47,14 +73,11 @@ class AuthService
             ]);
         }
 
-        $token = $user->createToken(
-            $data['device_name'] ?? 'mobile-app'
-        )->plainTextToken;
+        $tokens = $this->issueTokens($user, $data['device_name'] ?? 'mobile-app');
 
-        return [
+        return array_merge([
             'user' => $user,
-            'token' => $token,
-        ];
+        ], $tokens);
     }
 
     /**
@@ -77,20 +100,84 @@ class AuthService
             ]
         );
 
-        $token = $user->createToken($deviceName)->plainTextToken;
+        $tokens = $this->issueTokens($user, $deviceName);
 
-        return [
+        return array_merge([
             'user' => $user,
-            'token' => $token,
-        ];
+        ], $tokens);
     }
 
     /**
-     * Revoke the current access token.
+     * Refresh access token using a valid refresh token.
+     *
+     * @throws ValidationException
      */
-    public function logout(User $user): void
+    public function refreshToken(string $refreshTokenString, string $deviceName = 'mobile-app'): array
     {
-        $user->currentAccessToken()->delete();
+        $tokenModel = PersonalAccessToken::findToken($refreshTokenString);
+
+        if (! $tokenModel) {
+            throw ValidationException::withMessages([
+                'refresh_token' => ['The provided refresh token is invalid.'],
+            ]);
+        }
+
+        if ($tokenModel->expires_at && $tokenModel->expires_at->isPast()) {
+            $tokenModel->delete();
+            throw ValidationException::withMessages([
+                'refresh_token' => ['The provided refresh token has expired. Please log in again.'],
+            ]);
+        }
+
+        if (! $tokenModel->can('issue-access-token') && ! str_contains($tokenModel->name, 'refresh')) {
+            throw ValidationException::withMessages([
+                'refresh_token' => ['The provided token is not a valid refresh token.'],
+            ]);
+        }
+
+        /** @var User|null $user */
+        $user = $tokenModel->tokenable;
+
+        if (! $user) {
+            throw ValidationException::withMessages([
+                'refresh_token' => ['User associated with token not found.'],
+            ]);
+        }
+
+        // Rotate refresh token
+        $tokenModel->delete();
+
+        $tokens = $this->issueTokens($user, $deviceName);
+
+        return array_merge([
+            'user' => $user,
+        ], $tokens);
+    }
+
+    /**
+     * Revoke tokens and logout.
+     */
+    public function logout(User $user, ?string $refreshTokenString = null, bool $allDevices = false): void
+    {
+        if ($allDevices) {
+            $user->tokens()->delete();
+            return;
+        }
+
+        $currentToken = $user->currentAccessToken();
+        if ($currentToken) {
+            $currentToken->delete();
+        }
+
+        if ($refreshTokenString) {
+            $rtModel = PersonalAccessToken::findToken($refreshTokenString);
+            if ($rtModel && $rtModel->tokenable_id === $user->id) {
+                $rtModel->delete();
+            }
+        } else {
+            // Delete all refresh tokens for this user
+            $user->tokens()->where('name', 'like', '%-refresh')->delete();
+        }
     }
 
     /**

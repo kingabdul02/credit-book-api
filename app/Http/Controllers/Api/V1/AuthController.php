@@ -18,7 +18,8 @@ class AuthController extends Controller
 {
     public function __construct(
         private readonly AuthService $authService,
-    ) {}
+    ) {
+    }
 
     /**
      * Register a new user account.
@@ -31,11 +32,15 @@ class AuthController extends Controller
             'message' => 'Account created successfully.',
             'user' => new UserResource($result['user']),
             'token' => $result['token'],
+            'access_token' => $result['access_token'],
+            'refresh_token' => $result['refresh_token'],
+            'token_type' => $result['token_type'],
+            'expires_in' => $result['expires_in'],
         ], 201);
     }
 
     /**
-     * Login with email and password.
+     * Login with email/phone and PIN.
      */
     public function login(LoginRequest $request): JsonResponse
     {
@@ -45,6 +50,10 @@ class AuthController extends Controller
             'message' => 'Login successful.',
             'user' => new UserResource($result['user']),
             'token' => $result['token'],
+            'access_token' => $result['access_token'],
+            'refresh_token' => $result['refresh_token'],
+            'token_type' => $result['token_type'],
+            'expires_in' => $result['expires_in'],
         ]);
     }
 
@@ -62,15 +71,61 @@ class AuthController extends Controller
             'message' => 'Google authentication successful.',
             'user' => new UserResource($result['user']),
             'token' => $result['token'],
+            'access_token' => $result['access_token'],
+            'refresh_token' => $result['refresh_token'],
+            'token_type' => $result['token_type'],
+            'expires_in' => $result['expires_in'],
         ]);
     }
 
     /**
-     * Logout (revoke current token).
+     * Refresh access token using refresh token.
+     */
+    public function refresh(Request $request): JsonResponse
+    {
+        $refreshToken = $request->input('refresh_token') ?? $request->bearerToken();
+
+        if (!$refreshToken) {
+            return response()->json([
+                'message' => 'Refresh token is required.',
+            ], 422);
+        }
+
+        $result = $this->authService->refreshToken(
+            $refreshToken,
+            $request->input('device_name', 'mobile-app')
+        );
+
+        return response()->json([
+            'message' => 'Token refreshed successfully.',
+            'user' => new UserResource($result['user']),
+            'token' => $result['token'],
+            'access_token' => $result['access_token'],
+            'refresh_token' => $result['refresh_token'],
+            'token_type' => $result['token_type'],
+            'expires_in' => $result['expires_in'],
+        ]);
+    }
+
+    /**
+     * Logout (revoke access token, refresh token, and invalidate session).
      */
     public function logout(Request $request): JsonResponse
     {
-        $this->authService->logout($request->user());
+        $user = $request->user();
+
+        if ($user) {
+            $refreshToken = $request->input('refresh_token');
+            $allDevices = $request->boolean('all_devices', false);
+
+            $this->authService->logout($user, $refreshToken, $allDevices);
+        }
+
+        // Invalidate active session if present
+        if ($request->hasSession()) {
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+        }
 
         return response()->json([
             'message' => 'Logged out successfully.',

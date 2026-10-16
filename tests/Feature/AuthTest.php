@@ -181,5 +181,123 @@ class AuthTest extends TestCase
 
         $response->assertOk();
     }
+
+    public function test_login_returns_access_and_refresh_tokens(): void
+    {
+        $user = User::factory()->create([
+            'phone_number' => '+2348011223344',
+            'login_pin_hash' => bcrypt('123456'),
+        ]);
+
+        $response = $this->postJson('/api/v1/auth/login', [
+            'phone_number' => '+2348011223344',
+            'pin' => '123456',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonStructure([
+                'message',
+                'user',
+                'token',
+                'access_token',
+                'refresh_token',
+                'token_type',
+                'expires_in',
+            ]);
+
+        $this->assertNotEmpty($response->json('access_token'));
+        $this->assertNotEmpty($response->json('refresh_token'));
+    }
+
+    public function test_can_refresh_access_token(): void
+    {
+        $user = User::factory()->create([
+            'phone_number' => '+2348099887766',
+            'login_pin_hash' => bcrypt('123456'),
+        ]);
+
+        $loginResponse = $this->postJson('/api/v1/auth/login', [
+            'phone_number' => '+2348099887766',
+            'pin' => '123456',
+        ]);
+
+        $refreshToken = $loginResponse->json('refresh_token');
+
+        $refreshResponse = $this->postJson('/api/v1/auth/refresh', [
+            'refresh_token' => $refreshToken,
+        ]);
+
+        $refreshResponse->assertOk()
+            ->assertJsonStructure([
+                'message',
+                'user',
+                'token',
+                'access_token',
+                'refresh_token',
+                'token_type',
+                'expires_in',
+            ]);
+
+        $newAccessToken = $refreshResponse->json('access_token');
+        $this->assertNotEmpty($newAccessToken);
+
+        // Verify the new access token can be used to query authenticated endpoint
+        $userResponse = $this->withHeader('Authorization', 'Bearer ' . $newAccessToken)
+            ->getJson('/api/v1/auth/user');
+
+        $userResponse->assertOk();
+    }
+
+    public function test_invalid_refresh_token_fails(): void
+    {
+        $response = $this->postJson('/api/v1/auth/refresh', [
+            'refresh_token' => 'invalid-token-string',
+        ]);
+
+        $response->assertStatus(422);
+    }
+
+    public function test_logout_revokes_tokens(): void
+    {
+        $user = User::factory()->create([
+            'phone_number' => '+2348077665544',
+            'login_pin_hash' => bcrypt('123456'),
+        ]);
+
+        $loginResponse = $this->postJson('/api/v1/auth/login', [
+            'phone_number' => '+2348077665544',
+            'pin' => '123456',
+        ]);
+
+        $accessToken = $loginResponse->json('access_token');
+        $refreshToken = $loginResponse->json('refresh_token');
+
+        $logoutResponse = $this->withHeader('Authorization', 'Bearer ' . $accessToken)
+            ->postJson('/api/v1/auth/logout', [
+                'refresh_token' => $refreshToken,
+            ]);
+
+        $logoutResponse->assertOk()
+            ->assertJsonPath('message', 'Logged out successfully.');
+
+        // Verify tokens are deleted in database
+        $this->assertDatabaseCount('personal_access_tokens', 0);
+
+        // Reset auth guards in test environment
+        $this->app['auth']->forgetGuards();
+
+        // Token should now be rejected
+        $userResponse = $this->withHeader('Authorization', 'Bearer ' . $accessToken)
+            ->getJson('/api/v1/auth/user');
+
+        $userResponse->assertStatus(401);
+
+        // Refresh token should also be revoked
+        $refreshResponse = $this->postJson('/api/v1/auth/refresh', [
+            'refresh_token' => $refreshToken,
+        ]);
+
+        $refreshResponse->assertStatus(422);
+    }
 }
 

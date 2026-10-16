@@ -1,0 +1,141 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Enums\AccessRequestStatus;
+use App\Enums\VerificationStatus;
+use App\Models\LegacyAccessRequest;
+use App\Models\LegacyContact;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
+use Laravel\Sanctum\Sanctum;
+use Tests\TestCase;
+
+class LegacyTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_adding_contact_auto_enables_legacy_access_without_error(): void
+    {
+        $user = User::factory()->create([
+            'legacy_access_enabled' => false,
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/v1/legacy-contacts', [
+            'full_name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '+2348012345678',
+            'relationship' => 'Spouse',
+            'is_primary' => true,
+        ]);
+
+        $response->assertStatus(201);
+        $this->assertTrue($user->fresh()->legacy_access_enabled);
+        $this->assertDatabaseHas('legacy_contacts', [
+            'user_id' => $user->id,
+            'email' => 'jane@example.com',
+            'is_primary' => true,
+        ]);
+
+        $data = $response->json();
+        $this->assertNotEmpty($data['contact']['access_code']);
+    }
+
+    public function test_nominee_can_submit_access_request_using_access_code(): void
+    {
+        $user = User::factory()->create([
+            'legacy_access_enabled' => true,
+        ]);
+
+        $contact = LegacyContact::create([
+            'user_id' => $user->id,
+            'full_name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '+2348012345678',
+            'relationship' => 'Spouse',
+            'is_primary' => true,
+            'verification_status' => VerificationStatus::PENDING,
+            'access_code' => 'ABCDEF12',
+        ]);
+
+        $response = $this->postJson('/api/v1/legacy-access-requests', [
+            'access_code' => 'ABCDEF12',
+            'reason' => 'Emergency access required',
+        ]);
+
+        $response->assertStatus(201);
+        $this->assertEquals(VerificationStatus::VERIFIED, $contact->fresh()->verification_status);
+        $this->assertDatabaseHas('legacy_access_requests', [
+            'legacy_contact_id' => $contact->id,
+            'status' => AccessRequestStatus::PENDING->value,
+        ]);
+    }
+
+    public function test_submitting_with_recovery_code_grants_instant_approved_access(): void
+    {
+        $recoveryCode = 'ABCD-EFGH-IJKL';
+        $user = User::factory()->create([
+            'legacy_access_enabled' => true,
+            'legacy_recovery_code_hash' => Hash::make($recoveryCode),
+        ]);
+
+        $response = $this->postJson('/api/v1/legacy-access-requests', [
+            'recovery_code' => $recoveryCode,
+            'reason' => 'Owner incapacitated',
+        ]);
+
+        $response->assertStatus(201);
+        $data = $response->json();
+        $this->assertEquals('APPROVED', $data['access_request']['status']);
+        $this->assertTrue($data['access_request']['grants_access']);
+    }
+
+    public function test_approved_estate_report_requires_access_authorization(): void
+    {
+        $user = User::factory()->create([
+            'legacy_access_enabled' => true,
+        ]);
+
+        $contact = LegacyContact::create([
+            'user_id' => $user->id,
+            'full_name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '+2348012345678',
+            'relationship' => 'Spouse',
+            'is_primary' => true,
+            'verification_status' => VerificationStatus::VERIFIED,
+            'access_code' => 'XYZ98765',
+        ]);
+
+        $request = LegacyAccessRequest::create([
+            'user_id' => $user->id,
+            'legacy_contact_id' => $contact->id,
+            'reason' => 'Medical Emergency',
+            'recovery_code_provided' => false,
+            'status' => AccessRequestStatus::APPROVED,
+            'waiting_period_days' => 30,
+            'requested_at' => now(),
+            'approved_at' => now(),
+        ]);
+
+        // Attempt without access code -> 403
+        $unauthorized = $this->getJson("/api/v1/legacy-access-requests/{$request->id}/estate-report");
+        $unauthorized->assertStatus(403);
+
+        // Attempt with valid access code header -> 200
+        $authorized = $this->withHeader('X-Access-Code', 'XYZ98765')
+            ->getJson("/api/v1/legacy-access-requests/{$request->id}/estate-report");
+        $authorized->assertStatus(200);
+        $authorized->assertJsonStructure([
+            'estate_report' => [
+                'account_owner',
+                'receivables',
+                'payables',
+                'net_position',
+            ],
+        ]);
+    }
+}

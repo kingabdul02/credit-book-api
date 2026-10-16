@@ -118,11 +118,12 @@ class LegacyContactController extends Controller
     {
         $user = $request->user();
 
-        // Ensure Legacy Access is enabled
+        // Ensure Legacy Access is enabled, auto-enabling if not yet active
+        $recoveryCode = null;
         if (! $user->legacy_access_enabled) {
-            return response()->json([
-                'message' => 'Legacy Access must be enabled before adding contacts.',
-            ], 422);
+            $enableResult = $this->legacyAccessService->enableLegacyAccess($user);
+            $recoveryCode = $enableResult['recovery_code'] ?? null;
+            $user->refresh();
         }
 
         $result = $this->legacyAccessService->addContact($user, $request->validated());
@@ -131,6 +132,7 @@ class LegacyContactController extends Controller
             'message' => 'Legacy contact added. A verification email has been sent.',
             'contact' => new LegacyContactResource($result['contact']),
             'verification_token' => $result['verification_token'], // Temporary: until email delivery is wired up
+            'recovery_code' => $recoveryCode,
         ], 201);
     }
 

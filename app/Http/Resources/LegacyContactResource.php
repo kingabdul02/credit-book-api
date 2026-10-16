@@ -23,7 +23,7 @@ class LegacyContactResource extends JsonResource
             'is_primary' => $this->is_primary,
             'verification_status' => $this->verification_status?->value,
             'verified_at' => $this->verified_at?->toISOString(),
-            'access_code' => $this->when($isAccountOwner && $this->isVerified(), $this->access_code),
+            'access_code' => $this->when($isAccountOwner, $this->access_code),
             'has_approved_access' => $this->whenAppended('has_approved_access'),
             'access_requests_count' => $this->whenCounted('accessRequests'),
             'created_at' => $this->created_at?->toISOString(),
