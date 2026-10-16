@@ -124,7 +124,7 @@ class NotificationService
                 'title' => 'Welcome to CreditBook! 🎉',
                 'message' => 'Track your payables and receivables with biometrics, instant sync, and secure ledger management.',
                 'category' => 'system',
-                'action_route' => '/home',
+                'action_route' => null,
             ]);
 
             $this->createNotification($user, [
@@ -133,6 +133,12 @@ class NotificationService
                 'category' => 'legacy',
                 'action_route' => '/next-of-kin',
             ]);
+        } else {
+            // Clean up any existing welcome notification that previously had '/home'
+            $user->appNotifications()
+                ->where('title', 'like', 'Welcome to CreditBook%')
+                ->where('action_route', '/home')
+                ->update(['action_route' => null]);
         }
 
         // 2. Check Overdue Debts

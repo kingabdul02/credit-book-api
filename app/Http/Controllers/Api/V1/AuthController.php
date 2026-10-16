@@ -317,4 +317,66 @@ class AuthController extends Controller
             'valid' => $valid,
         ]);
     }
+
+    /**
+     * Request a 6-digit PIN reset code for forgotten PIN.
+     */
+    public function forgotPin(Request $request): JsonResponse
+    {
+        $request->validate([
+            'phone_number' => ['required', 'string'],
+        ]);
+
+        $result = $this->authService->requestPinReset($request->input('phone_number'));
+
+        return response()->json($result);
+    }
+
+    /**
+     * Verify the 6-digit PIN reset code and receive a reset token.
+     */
+    public function verifyPinResetCode(Request $request): JsonResponse
+    {
+        $request->validate([
+            'phone_number' => ['required', 'string'],
+            'code' => ['required', 'string', 'digits:6'],
+        ]);
+
+        $result = $this->authService->verifyPinResetCode(
+            $request->input('phone_number'),
+            $request->input('code')
+        );
+
+        return response()->json($result);
+    }
+
+    /**
+     * Reset login PIN using verified reset token.
+     */
+    public function resetPin(Request $request): JsonResponse
+    {
+        $request->validate([
+            'phone_number' => ['required', 'string'],
+            'reset_token' => ['required', 'string'],
+            'pin' => ['required', 'string', 'digits:6', 'confirmed'],
+            'device_name' => ['sometimes', 'string'],
+        ]);
+
+        $result = $this->authService->resetPin(
+            $request->input('phone_number'),
+            $request->input('reset_token'),
+            $request->input('pin'),
+            $request->input('device_name', 'mobile-app')
+        );
+
+        return response()->json([
+            'message' => $result['message'],
+            'user' => new UserResource($result['user']),
+            'token' => $result['token'],
+            'access_token' => $result['access_token'],
+            'refresh_token' => $result['refresh_token'],
+            'token_type' => $result['token_type'],
+            'expires_in' => $result['expires_in'],
+        ]);
+    }
 }

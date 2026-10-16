@@ -4,9 +4,14 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Mail\PinResetMail;
+use App\Models\PinReset;
 use App\Models\User;
+use App\Services\NotificationService;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\PersonalAccessToken;
 
@@ -264,5 +269,143 @@ class AuthService
         }
 
         return $payload;
+    }
+
+    /**
+     * Request a 6-digit PIN reset verification code for a phone number.
+     *
+     * @throws ValidationException
+     */
+    public function requestPinReset(string $phoneNumber): array
+    {
+        $user = User::where('phone_number', $phoneNumber)->first();
+
+        if (! $user) {
+            throw ValidationException::withMessages([
+                'phone_number' => ['No account found with this phone number.'],
+            ]);
+        }
+
+        // Clean up previous reset requests for this phone number
+        PinReset::where('phone_number', $phoneNumber)->delete();
+
+        // Generate 6-digit numeric verification code
+        $code = str_pad((string) random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
+        $expiresAt = now()->addMinutes(10);
+
+        PinReset::create([
+            'phone_number' => $user->phone_number,
+            'email' => $user->email,
+            'code' => $code,
+            'expires_at' => $expiresAt,
+        ]);
+
+        // Send code via email if user has an email
+        if (!empty($user->email)) {
+            try {
+                Mail::to($user->email)->send(new PinResetMail($user, $code));
+            } catch (\Throwable $e) {
+                // Log and continue gracefully
+                report($e);
+            }
+        }
+
+        // Log notification to user
+        NotificationService::log(
+            user: $user,
+            title: 'PIN Reset Requested 🔐',
+            message: 'A verification code was generated to reset your 6-digit login PIN.',
+            category: 'system',
+            actionRoute: '/settings',
+        );
+
+        return [
+            'message' => 'Verification code sent successfully.',
+            'phone_number' => $user->phone_number,
+            'has_email' => !empty($user->email),
+            'debug_code' => app()->environment('local', 'testing') ? $code : null,
+        ];
+    }
+
+    /**
+     * Verify the 6-digit PIN reset code and issue a reset token.
+     *
+     * @throws ValidationException
+     */
+    public function verifyPinResetCode(string $phoneNumber, string $code): array
+    {
+        $pinReset = PinReset::where('phone_number', $phoneNumber)
+            ->where('code', $code)
+            ->where('expires_at', '>', now())
+            ->latest()
+            ->first();
+
+        if (! $pinReset) {
+            throw ValidationException::withMessages([
+                'code' => ['The verification code is invalid or has expired.'],
+            ]);
+        }
+
+        $resetToken = Str::random(64);
+        $pinReset->update([
+            'verified_at' => now(),
+            'reset_token' => $resetToken,
+        ]);
+
+        return [
+            'message' => 'Code verified successfully.',
+            'reset_token' => $resetToken,
+        ];
+    }
+
+    /**
+     * Reset login PIN using verified reset token.
+     *
+     * @throws ValidationException
+     */
+    public function resetPin(
+        string $phoneNumber,
+        string $resetToken,
+        string $newPin,
+        string $deviceName = 'mobile-app'
+    ): array {
+        $pinReset = PinReset::where('phone_number', $phoneNumber)
+            ->where('reset_token', $resetToken)
+            ->whereNotNull('verified_at')
+            ->where('expires_at', '>', now())
+            ->first();
+
+        if (! $pinReset) {
+            throw ValidationException::withMessages([
+                'reset_token' => ['The reset session is invalid or has expired. Please request a new code.'],
+            ]);
+        }
+
+        $user = User::where('phone_number', $phoneNumber)->firstOrFail();
+
+        // Update login PIN
+        $user->update([
+            'login_pin_hash' => Hash::make($newPin),
+        ]);
+
+        // Invalidate reset token
+        $pinReset->delete();
+
+        // Log security notification
+        NotificationService::log(
+            user: $user,
+            title: 'Login PIN Reset Successfully 🔒',
+            message: 'Your login PIN has been updated. You can now use your new PIN to sign in.',
+            category: 'system',
+            actionRoute: '/settings',
+        );
+
+        // Issue new authentication tokens for immediate login
+        $tokens = $this->issueTokens($user, $deviceName);
+
+        return array_merge([
+            'message' => 'PIN reset successfully.',
+            'user' => $user,
+        ], $tokens);
     }
 }

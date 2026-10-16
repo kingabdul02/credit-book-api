@@ -38,6 +38,12 @@ Route::prefix('v1')->group(function () {
             ->middleware('throttle:10,1');
         Route::post('refresh', [AuthController::class, 'refresh'])
             ->middleware('throttle:30,1');
+        Route::post('pin/forgot', [AuthController::class, 'forgotPin'])
+            ->middleware('throttle:5,1');
+        Route::post('pin/verify-code', [AuthController::class, 'verifyPinResetCode'])
+            ->middleware('throttle:10,1');
+        Route::post('pin/reset', [AuthController::class, 'resetPin'])
+            ->middleware('throttle:5,1');
     });
 
     // Public avatar image route (bypasses LiteSpeed symlink 403 restrictions)
