@@ -66,7 +66,7 @@ class AnalyticsTest extends TestCase
         $response->assertOk()
             ->assertJsonStructure([
                 'insights' => [
-                    'summary',
+                    'summary' => ['total_lent', 'total_borrowed', 'total_collected', 'total_repaid'],
                     'monthly_trends',
                     'top_debtors',
                     'top_creditors',
@@ -74,5 +74,77 @@ class AnalyticsTest extends TestCase
                     'category_breakdown',
                 ],
             ]);
+    }
+
+    public function test_insights_timeframes_filter_summary_and_trends(): void
+    {
+        $contact = Contact::factory()->create(['user_id' => $this->user->id]);
+
+        // Debt created today (within weekly, monthly, yearly)
+        Debt::factory()->create([
+            'user_id' => $this->user->id,
+            'contact_id' => $contact->id,
+            'transaction_type' => TransactionType::THEY_OWE_ME,
+            'original_amount' => 5000,
+            'paid_amount' => 0,
+            'category' => 'Business',
+            'created_at' => now(),
+        ]);
+
+        // Debt created 20 days ago (within monthly, yearly, but outside weekly)
+        Debt::factory()->create([
+            'user_id' => $this->user->id,
+            'contact_id' => $contact->id,
+            'transaction_type' => TransactionType::THEY_OWE_ME,
+            'original_amount' => 10000,
+            'paid_amount' => 0,
+            'category' => 'Personal',
+            'created_at' => now()->subDays(20),
+        ]);
+
+        // Debt created 60 days ago (within yearly, outside weekly and monthly)
+        Debt::factory()->create([
+            'user_id' => $this->user->id,
+            'contact_id' => $contact->id,
+            'transaction_type' => TransactionType::THEY_OWE_ME,
+            'original_amount' => 20000,
+            'paid_amount' => 0,
+            'category' => null, // Test null category fallback
+            'created_at' => now()->subDays(60),
+        ]);
+
+        // 1. Weekly Insights
+        $weeklyResponse = $this->actingAs($this->user)
+            ->getJson('/api/v1/analytics/insights?period=weekly');
+        $weeklyResponse->assertOk();
+        $weeklyData = $weeklyResponse->json('insights');
+        $this->assertEquals('5000.00', $weeklyData['summary']['total_lent']);
+        $this->assertCount(7, $weeklyData['monthly_trends']); // 7 daily points
+
+        // 2. Monthly Insights
+        $monthlyResponse = $this->actingAs($this->user)
+            ->getJson('/api/v1/analytics/insights?period=monthly');
+        $monthlyResponse->assertOk();
+        $monthlyData = $monthlyResponse->json('insights');
+        $this->assertEquals('15000.00', $monthlyData['summary']['total_lent']);
+        $this->assertCount(4, $monthlyData['monthly_trends']); // 4 weekly points
+
+        // 3. Yearly Insights
+        $yearlyResponse = $this->actingAs($this->user)
+            ->getJson('/api/v1/analytics/insights?period=yearly');
+        $yearlyResponse->assertOk();
+        $yearlyData = $yearlyResponse->json('insights');
+        $this->assertEquals('35000.00', $yearlyData['summary']['total_lent']);
+        $this->assertCount(12, $yearlyData['monthly_trends']); // 12 monthly points
+
+        // Category breakdown in yearly should include General (from null category) and have percentage
+        $categories = collect($yearlyData['category_breakdown']);
+        $this->assertTrue($categories->contains('category', 'General'));
+        $this->assertTrue($categories->contains('category', 'Business'));
+        $this->assertTrue($categories->contains('category', 'Personal'));
+        foreach ($yearlyData['category_breakdown'] as $catItem) {
+            $this->assertArrayHasKey('percentage', $catItem);
+            $this->assertGreaterThan(0, $catItem['percentage']);
+        }
     }
 }

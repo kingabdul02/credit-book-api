@@ -72,6 +72,14 @@ class DebtService
     public function create(string $userId, array $data): Debt
     {
         return DB::transaction(function () use ($userId, $data) {
+            $category = $data['category'] ?? null;
+            if (empty($category) && !empty($data['note'])) {
+                $category = $this->inferCategoryFromNote($data['note']);
+            }
+            if (empty($category)) {
+                $category = 'General';
+            }
+
             $debt = Debt::create([
                 'user_id' => $userId,
                 'contact_id' => $data['contact_id'],
@@ -80,7 +88,7 @@ class DebtService
                 'paid_amount' => 0,
                 'currency' => $data['currency'] ?? 'NGN',
                 'note' => $data['note'] ?? null,
-                'category' => $data['category'] ?? null,
+                'category' => $category,
                 'status' => DebtStatus::UNPAID,
                 'due_date' => $data['due_date'] ?? null,
                 'reminder_enabled' => $data['reminder_enabled'] ?? false,
@@ -267,5 +275,36 @@ class DebtService
             ->where('due_date', '<', now()->toDateString())
             ->whereNotIn('status', [DebtStatus::PAID, DebtStatus::OVERDUE])
             ->update(['status' => DebtStatus::OVERDUE]);
+    }
+
+    private function inferCategoryFromNote(string $note): ?string
+    {
+        $lower = strtolower($note);
+        if (preg_match('/\b(business|work|supplier|stock|goods|inventory|client|invoice)\b/', $lower)) {
+            return 'Business';
+        }
+        if (preg_match('/\b(rent|apartment|house|flat|lease|landlord)\b/', $lower)) {
+            return 'Rent';
+        }
+        if (preg_match('/\b(school|fees|tuition|exam|book|course|study|uni|college)\b/', $lower)) {
+            return 'Education';
+        }
+        if (preg_match('/\b(food|lunch|dinner|breakfast|groceries|restaurant|eat|meal|snack)\b/', $lower)) {
+            return 'Food & Dining';
+        }
+        if (preg_match('/\b(hospital|doctor|med|medicine|pharmacy|drug|health|clinic|sick)\b/', $lower)) {
+            return 'Healthcare';
+        }
+        if (preg_match('/\b(transport|fuel|gas|uber|bolt|car|taxi|fare|flight)\b/', $lower)) {
+            return 'Transportation';
+        }
+        if (preg_match('/\b(shopping|cloth|shoes|phone|laptop|gadget|buy)\b/', $lower)) {
+            return 'Shopping';
+        }
+        if (preg_match('/\b(personal|gift|party|birthday|wedding|friend|family)\b/', $lower)) {
+            return 'Personal';
+        }
+
+        return null;
     }
 }

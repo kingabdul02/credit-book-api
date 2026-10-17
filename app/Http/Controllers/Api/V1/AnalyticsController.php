@@ -48,7 +48,7 @@ class AnalyticsController extends Controller
     {
         $data = $this->analyticsService->getInsights(
             $request->user()->id,
-            $request->query('period', '6months'),
+            $request->query('period', 'monthly'),
         );
 
         return response()->json([

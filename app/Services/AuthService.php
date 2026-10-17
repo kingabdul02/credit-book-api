@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Mail\PinResetMail;
+use App\Mail\TwoFactorMail;
 use App\Models\PinReset;
 use App\Models\User;
 use App\Services\NotificationService;
@@ -17,6 +18,13 @@ use Laravel\Sanctum\PersonalAccessToken;
 
 class AuthService
 {
+    protected TotpService $totpService;
+
+    public function __construct(?TotpService $totpService = null)
+    {
+        $this->totpService = $totpService ?? new TotpService();
+    }
+
     /**
      * Issue both an access token and a refresh token for the user.
      */
@@ -76,6 +84,81 @@ class AuthService
             throw ValidationException::withMessages([
                 'phone_number' => ['The provided phone number or PIN is incorrect.'],
             ]);
+        }
+
+        // If Two-Factor Authentication is enabled, issue a 2FA challenge
+        if ($user->two_factor_enabled) {
+            $method = $user->two_factor_method ?: 'authenticator';
+            $twoFactorToken = Str::random(64);
+
+            if ($method === 'authenticator' && empty($user->two_factor_secret)) {
+                $user->update(['two_factor_secret' => $this->totpService->generateSecret()]);
+                $user->refresh();
+            }
+
+            $code = null;
+            $debugCode = null;
+
+            if ($method === 'authenticator') {
+                $debugCode = (app()->environment('local', 'testing') && $user->two_factor_secret)
+                    ? $this->totpService->getCode($user->two_factor_secret)
+                    : null;
+
+                $user->update([
+                    'two_factor_token' => $twoFactorToken,
+                    'two_factor_expires_at' => now()->addMinutes(10),
+                ]);
+            } else {
+                $code = (string) random_int(100000, 999999);
+                $debugCode = app()->environment('local', 'testing') ? $code : null;
+
+                $user->update([
+                    'two_factor_code' => $code,
+                    'two_factor_token' => $twoFactorToken,
+                    'two_factor_expires_at' => now()->addMinutes(10),
+                ]);
+
+                if ($method === 'email' && !empty($user->email)) {
+                    try {
+                        Mail::to($user->email)->send(new TwoFactorMail($user, $code));
+                    } catch (\Throwable $e) {
+                        report($e);
+                    }
+                }
+            }
+
+            $availableMethods = ['authenticator'];
+            if (!empty($user->email)) {
+                $availableMethods[] = 'email';
+            }
+            if (!empty($user->phone_number)) {
+                $availableMethods[] = 'phone';
+            }
+
+            NotificationService::log(
+                user: $user,
+                title: 'Two-Factor Challenge 🛡️',
+                message: "A 2FA challenge ({$method}) was presented for your account sign-in.",
+                category: 'system',
+                actionRoute: '/settings',
+            );
+
+            return [
+                'requires_2fa' => true,
+                'two_factor_token' => $twoFactorToken,
+                'method' => $method,
+                'default_method' => $method,
+                'available_methods' => $availableMethods,
+                'phone_number' => $user->phone_number,
+                'masked_phone' => $this->maskPhone($user->phone_number),
+                'email' => $this->maskEmail($user->email),
+                'message' => $method === 'authenticator'
+                    ? 'Enter the 6-digit code from your Authenticator app.'
+                    : ($method === 'email'
+                        ? 'A verification code has been sent to your registered email.'
+                        : 'A verification code has been sent to your phone number.'),
+                'debug_code' => $debugCode,
+            ];
         }
 
         $tokens = $this->issueTokens($user, $data['device_name'] ?? 'mobile-app');
@@ -408,4 +491,421 @@ class AuthService
             'user' => $user,
         ], $tokens);
     }
+
+    /**
+     * Setup TOTP Authenticator for user (secret and QR code).
+     */
+    public function setupTwoFactorAuthenticator(User $user): array
+    {
+        $secret = $user->two_factor_secret ?: $this->totpService->generateSecret();
+        $user->update(['two_factor_secret' => $secret]);
+
+        $account = $user->phone_number ?: ($user->email ?: 'User');
+        $otpAuthUrl = $this->totpService->getOtpAuthUrl($secret, $account);
+        $qrCodeUrl = $this->totpService->getQrCodeUrl($otpAuthUrl);
+
+        return [
+            'method' => 'authenticator',
+            'secret' => $secret,
+            'otpauth_url' => $otpAuthUrl,
+            'qr_code_url' => $qrCodeUrl,
+            'debug_code' => (app()->environment('local', 'testing')) ? $this->totpService->getCode($secret) : null,
+        ];
+    }
+
+    /**
+     * Send setup verification code or generate authenticator secret to configure 2FA.
+     *
+     * @throws ValidationException
+     */
+    public function sendTwoFactorSetupCode(User $user, string $method = 'authenticator', ?string $email = null, ?string $phoneNumber = null): array
+    {
+        if ($method === 'authenticator') {
+            return $this->setupTwoFactorAuthenticator($user);
+        }
+
+        if ($method === 'email') {
+            if (!empty($email) && $email !== $user->email) {
+                $existing = User::where('email', $email)->where('id', '!=', $user->id)->first();
+                if ($existing) {
+                    throw ValidationException::withMessages([
+                        'email' => ['This email address is already in use by another account.'],
+                    ]);
+                }
+                $user->update(['email' => $email]);
+            }
+
+            if (empty($user->email)) {
+                throw ValidationException::withMessages([
+                    'email' => ['An email address is required to enable Email Two-Factor Authentication.'],
+                ]);
+            }
+
+            $code = (string) random_int(100000, 999999);
+            $user->update([
+                'two_factor_code' => $code,
+                'two_factor_expires_at' => now()->addMinutes(10),
+            ]);
+
+            try {
+                Mail::to($user->email)->send(new TwoFactorMail($user, $code));
+            } catch (\Throwable $e) {
+                report($e);
+            }
+
+            return [
+                'method' => 'email',
+                'message' => 'Verification code sent to your email.',
+                'email' => $user->email,
+                'debug_code' => app()->environment('local', 'testing') ? $code : null,
+            ];
+        }
+
+        if ($method === 'phone') {
+            if (!empty($phoneNumber) && $phoneNumber !== $user->phone_number) {
+                $existing = User::where('phone_number', $phoneNumber)->where('id', '!=', $user->id)->first();
+                if ($existing) {
+                    throw ValidationException::withMessages([
+                        'phone_number' => ['This phone number is already in use by another account.'],
+                    ]);
+                }
+                $user->update(['phone_number' => $phoneNumber]);
+            }
+
+            $code = (string) random_int(100000, 999999);
+            $user->update([
+                'two_factor_code' => $code,
+                'two_factor_expires_at' => now()->addMinutes(10),
+            ]);
+
+            return [
+                'method' => 'phone',
+                'message' => 'Verification code sent to your phone number.',
+                'phone_number' => $user->phone_number,
+                'masked_phone' => $this->maskPhone($user->phone_number),
+                'debug_code' => app()->environment('local', 'testing') ? $code : null,
+            ];
+        }
+
+        throw ValidationException::withMessages([
+            'method' => ['Invalid 2FA method selected.'],
+        ]);
+    }
+
+    /**
+     * Switch 2FA challenge method on the fly during sign-in.
+     *
+     * @throws ValidationException
+     */
+    public function switchTwoFactorChallengeMethod(string $twoFactorToken, string $method): array
+    {
+        $user = User::where('two_factor_token', $twoFactorToken)
+            ->where('two_factor_expires_at', '>', now())
+            ->first();
+
+        if (! $user) {
+            throw ValidationException::withMessages([
+                'token' => ['The 2FA session is invalid or has expired. Please log in again.'],
+            ]);
+        }
+
+        if (!in_array($method, ['authenticator', 'email', 'phone'], true)) {
+            throw ValidationException::withMessages([
+                'method' => ['Unsupported two-factor method.'],
+            ]);
+        }
+
+        $code = null;
+        $debugCode = null;
+        $message = '';
+
+        if ($method === 'authenticator') {
+            if (empty($user->two_factor_secret)) {
+                $user->update(['two_factor_secret' => $this->totpService->generateSecret()]);
+                $user->refresh();
+            }
+            $debugCode = (app()->environment('local', 'testing') && $user->two_factor_secret)
+                ? $this->totpService->getCode($user->two_factor_secret)
+                : null;
+            $message = 'Enter the 6-digit code from your Authenticator app.';
+        } elseif ($method === 'email') {
+            if (empty($user->email)) {
+                throw ValidationException::withMessages([
+                    'email' => ['No registered email address found on your account.'],
+                ]);
+            }
+            $code = (string) random_int(100000, 999999);
+            $debugCode = app()->environment('local', 'testing') ? $code : null;
+            $user->update([
+                'two_factor_code' => $code,
+                'two_factor_expires_at' => now()->addMinutes(10),
+            ]);
+            try {
+                Mail::to($user->email)->send(new TwoFactorMail($user, $code));
+            } catch (\Throwable $e) {
+                report($e);
+            }
+            $message = "A verification code has been sent to {$this->maskEmail($user->email)}.";
+        } elseif ($method === 'phone') {
+            $code = (string) random_int(100000, 999999);
+            $debugCode = app()->environment('local', 'testing') ? $code : null;
+            $user->update([
+                'two_factor_code' => $code,
+                'two_factor_expires_at' => now()->addMinutes(10),
+            ]);
+            $message = "A verification code has been sent to {$this->maskPhone($user->phone_number)}.";
+        }
+
+        return [
+            'method' => $method,
+            'message' => $message,
+            'email' => $this->maskEmail($user->email),
+            'masked_phone' => $this->maskPhone($user->phone_number),
+            'debug_code' => $debugCode,
+        ];
+    }
+
+    /**
+     * Verify 2FA code during login and issue authentication tokens.
+     *
+     * @throws ValidationException
+     */
+    public function verifyTwoFactor(string $twoFactorToken, string $code, ?string $method = null, string $deviceName = 'mobile-app'): array
+    {
+        $user = User::where('two_factor_token', $twoFactorToken)
+            ->where('two_factor_expires_at', '>', now())
+            ->first();
+
+        if (! $user) {
+            throw ValidationException::withMessages([
+                'token' => ['The 2FA session is invalid or has expired. Please log in again.'],
+            ]);
+        }
+
+        $effectiveMethod = $method ?: ($user->two_factor_method ?: 'authenticator');
+        $isValid = false;
+
+        if ($effectiveMethod === 'authenticator') {
+            if (!empty($user->two_factor_secret)) {
+                $isValid = $this->totpService->verifyCode($user->two_factor_secret, $code);
+            }
+            if (!$isValid && app()->environment('local', 'testing') && ($code === '123456' || $code === $user->two_factor_code)) {
+                $isValid = true;
+            }
+            if (!$isValid) {
+                throw ValidationException::withMessages([
+                    'code' => ['The authenticator verification code is incorrect or expired.'],
+                ]);
+            }
+        } else {
+            // Email or Phone OTP verification
+            if ($user->two_factor_code && hash_equals((string) $user->two_factor_code, (string) $code)) {
+                $isValid = true;
+            } elseif (app()->environment('local', 'testing') && $code === '123456') {
+                $isValid = true;
+            }
+
+            if (!$isValid) {
+                throw ValidationException::withMessages([
+                    'code' => ['The verification code is invalid or has expired.'],
+                ]);
+            }
+        }
+
+        // Clear 2FA challenge tokens
+        $user->update([
+            'two_factor_code' => null,
+            'two_factor_token' => null,
+            'two_factor_expires_at' => null,
+        ]);
+
+        NotificationService::log(
+            user: $user,
+            title: 'Successful 2FA Sign-In 🛡️',
+            message: "You have signed in to CreditBook using two-factor authentication ({$effectiveMethod}).",
+            category: 'system',
+            actionRoute: '/home',
+        );
+
+        $tokens = $this->issueTokens($user, $deviceName);
+
+        return array_merge([
+            'message' => 'Two-factor authentication verified successfully.',
+            'user' => $user,
+        ], $tokens);
+    }
+
+    /**
+     * Resend 2FA login verification code.
+     *
+     * @throws ValidationException
+     */
+    public function resendTwoFactor(string $twoFactorToken, ?string $method = null): array
+    {
+        $user = User::where('two_factor_token', $twoFactorToken)
+            ->where('two_factor_expires_at', '>', now())
+            ->first();
+
+        if (! $user) {
+            throw ValidationException::withMessages([
+                'token' => ['The 2FA session is invalid or has expired. Please log in again.'],
+            ]);
+        }
+
+        $effectiveMethod = $method ?: ($user->two_factor_method ?: 'authenticator');
+
+        if ($effectiveMethod === 'authenticator') {
+            $debugCode = (app()->environment('local', 'testing') && $user->two_factor_secret)
+                ? $this->totpService->getCode($user->two_factor_secret)
+                : null;
+
+            return [
+                'method' => 'authenticator',
+                'message' => 'Please enter the 6-digit code currently displayed in your Authenticator app.',
+                'debug_code' => $debugCode,
+            ];
+        }
+
+        $code = (string) random_int(100000, 999999);
+        $user->update([
+            'two_factor_code' => $code,
+            'two_factor_expires_at' => now()->addMinutes(10),
+        ]);
+
+        if ($effectiveMethod === 'email' && !empty($user->email)) {
+            try {
+                Mail::to($user->email)->send(new TwoFactorMail($user, $code));
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
+        return [
+            'method' => $effectiveMethod,
+            'message' => $effectiveMethod === 'email'
+                ? 'A new verification code has been sent to your email.'
+                : 'A new verification code has been sent to your phone number.',
+            'debug_code' => app()->environment('local', 'testing') ? $code : null,
+        ];
+    }
+
+    /**
+     * Verify code and enable Two-Factor Authentication with chosen method.
+     *
+     * @throws ValidationException
+     */
+    public function enableTwoFactor(User $user, string $code, string $method = 'authenticator'): User
+    {
+        $isValid = false;
+
+        if ($method === 'authenticator') {
+            if (!empty($user->two_factor_secret)) {
+                $isValid = $this->totpService->verifyCode($user->two_factor_secret, $code);
+            }
+            if (!$isValid && app()->environment('local', 'testing') && ($code === '123456' || $code === $user->two_factor_code)) {
+                $isValid = true;
+            }
+            if (!$isValid) {
+                throw ValidationException::withMessages([
+                    'code' => ['The authenticator verification code is incorrect.'],
+                ]);
+            }
+        } else {
+            if ($user->two_factor_code && hash_equals((string) $user->two_factor_code, (string) $code) && now()->isBefore($user->two_factor_expires_at)) {
+                $isValid = true;
+            } elseif (app()->environment('local', 'testing') && $code === '123456') {
+                $isValid = true;
+            }
+
+            if (!$isValid) {
+                throw ValidationException::withMessages([
+                    'code' => ['The verification code is invalid or has expired.'],
+                ]);
+            }
+        }
+
+        $user->update([
+            'two_factor_enabled' => true,
+            'two_factor_method' => $method,
+            'two_factor_code' => null,
+            'two_factor_expires_at' => null,
+        ]);
+
+        NotificationService::log(
+            user: $user,
+            title: 'Two-Factor Authentication Enabled 🛡️',
+            message: "Two-factor authentication is now active on your account using {$method}.",
+            category: 'system',
+            actionRoute: '/settings',
+        );
+
+        return $user->fresh();
+    }
+
+    /**
+     * Disable Two-Factor Authentication.
+     *
+     * @throws ValidationException
+     */
+    public function disableTwoFactor(User $user, ?string $pin = null): User
+    {
+        if ($pin !== null) {
+            if (!$user->login_pin_hash || !Hash::check($pin, $user->login_pin_hash)) {
+                throw ValidationException::withMessages([
+                    'pin' => ['The PIN is incorrect.'],
+                ]);
+            }
+        }
+
+        $user->update([
+            'two_factor_enabled' => false,
+            'two_factor_code' => null,
+            'two_factor_token' => null,
+            'two_factor_expires_at' => null,
+        ]);
+
+        NotificationService::log(
+            user: $user,
+            title: 'Two-Factor Authentication Disabled',
+            message: 'Two-factor authentication has been disabled for your account.',
+            category: 'system',
+            actionRoute: '/settings',
+        );
+
+        return $user->fresh();
+    }
+
+    /**
+     * Mask email for secure display (e.g. j***n@example.com).
+     */
+    public function maskEmail(?string $email): ?string
+    {
+        if (!$email || !str_contains($email, '@')) {
+            return $email;
+        }
+
+        [$name, $domain] = explode('@', $email, 2);
+        if (strlen($name) <= 2) {
+            $maskedName = substr($name, 0, 1) . '*';
+        } else {
+            $maskedName = substr($name, 0, 1) . str_repeat('*', min(4, strlen($name) - 2)) . substr($name, -1);
+        }
+
+        return $maskedName . '@' . $domain;
+    }
+
+    /**
+     * Mask phone number for secure display (e.g. +234 ••• ••• 44).
+     */
+    public function maskPhone(?string $phone): ?string
+    {
+        if (!$phone || strlen($phone) < 4) {
+            return $phone;
+        }
+
+        $last4 = substr($phone, -4);
+        $prefix = substr($phone, 0, min(4, strlen($phone) - 4));
+        return $prefix . ' ••• ••• ' . $last4;
+    }
 }
+

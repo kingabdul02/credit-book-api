@@ -55,6 +55,21 @@ class AuthController extends Controller
     {
         $result = $this->authService->login($request->validated());
 
+        if ($result['requires_2fa'] ?? false) {
+            return response()->json([
+                'message' => $result['message'],
+                'requires_2fa' => true,
+                'two_factor_token' => $result['two_factor_token'],
+                'method' => $result['method'] ?? 'authenticator',
+                'default_method' => $result['default_method'] ?? 'authenticator',
+                'available_methods' => $result['available_methods'] ?? ['authenticator', 'email', 'phone'],
+                'phone_number' => $result['phone_number'],
+                'masked_phone' => $result['masked_phone'] ?? null,
+                'email' => $result['email'],
+                'debug_code' => $result['debug_code'] ?? null,
+            ]);
+        }
+
         return response()->json([
             'message' => 'Login successful.',
             'user' => new UserResource($result['user']),
@@ -377,6 +392,132 @@ class AuthController extends Controller
             'refresh_token' => $result['refresh_token'],
             'token_type' => $result['token_type'],
             'expires_in' => $result['expires_in'],
+        ]);
+    }
+
+    /**
+     * Verify 2FA challenge code during sign-in.
+     */
+    public function verifyTwoFactor(Request $request): JsonResponse
+    {
+        $request->validate([
+            'two_factor_token' => ['required', 'string'],
+            'code' => ['required', 'string', 'digits:6'],
+            'method' => ['sometimes', 'string', 'in:authenticator,email,phone'],
+            'device_name' => ['sometimes', 'string'],
+        ]);
+
+        $result = $this->authService->verifyTwoFactor(
+            $request->input('two_factor_token'),
+            $request->input('code'),
+            $request->input('method'),
+            $request->input('device_name', 'mobile-app')
+        );
+
+        return response()->json([
+            'message' => $result['message'],
+            'user' => new UserResource($result['user']),
+            'token' => $result['token'],
+            'access_token' => $result['access_token'],
+            'refresh_token' => $result['refresh_token'],
+            'token_type' => $result['token_type'],
+            'expires_in' => $result['expires_in'],
+        ]);
+    }
+
+    /**
+     * Resend 2FA login verification code.
+     */
+    public function resendTwoFactor(Request $request): JsonResponse
+    {
+        $request->validate([
+            'two_factor_token' => ['required', 'string'],
+            'method' => ['sometimes', 'string', 'in:authenticator,email,phone'],
+        ]);
+
+        $result = $this->authService->resendTwoFactor(
+            $request->input('two_factor_token'),
+            $request->input('method')
+        );
+
+        return response()->json($result);
+    }
+
+    /**
+     * Switch 2FA challenge method on the fly.
+     */
+    public function switchTwoFactorMethod(Request $request): JsonResponse
+    {
+        $request->validate([
+            'two_factor_token' => ['required', 'string'],
+            'method' => ['required', 'string', 'in:authenticator,email,phone'],
+        ]);
+
+        $result = $this->authService->switchTwoFactorChallengeMethod(
+            $request->input('two_factor_token'),
+            $request->input('method')
+        );
+
+        return response()->json($result);
+    }
+
+    /**
+     * Send setup verification code or generate authenticator secret to configure 2FA.
+     */
+    public function sendTwoFactorSetupCode(Request $request): JsonResponse
+    {
+        $request->validate([
+            'method' => ['sometimes', 'string', 'in:authenticator,email,phone'],
+            'email' => ['sometimes', 'nullable', 'email', 'max:255'],
+            'phone_number' => ['sometimes', 'nullable', 'string', 'max:30'],
+        ]);
+
+        $result = $this->authService->sendTwoFactorSetupCode(
+            $request->user(),
+            $request->input('method', 'authenticator'),
+            $request->input('email'),
+            $request->input('phone_number')
+        );
+
+        return response()->json($result);
+    }
+
+    /**
+     * Verify code and enable Two-Factor Authentication with chosen method.
+     */
+    public function enableTwoFactor(Request $request): JsonResponse
+    {
+        $request->validate([
+            'code' => ['required', 'string', 'digits:6'],
+            'method' => ['sometimes', 'string', 'in:authenticator,email,phone'],
+        ]);
+
+        $user = $this->authService->enableTwoFactor(
+            $request->user(),
+            $request->input('code'),
+            $request->input('method', 'authenticator')
+        );
+
+        return response()->json([
+            'message' => 'Two-factor authentication enabled successfully.',
+            'user' => new UserResource($user),
+        ]);
+    }
+
+    /**
+     * Disable Two-Factor Authentication.
+     */
+    public function disableTwoFactor(Request $request): JsonResponse
+    {
+        $request->validate([
+            'pin' => ['sometimes', 'nullable', 'string', 'digits:6'],
+        ]);
+
+        $user = $this->authService->disableTwoFactor($request->user(), $request->input('pin'));
+
+        return response()->json([
+            'message' => 'Two-factor authentication disabled successfully.',
+            'user' => new UserResource($user),
         ]);
     }
 }

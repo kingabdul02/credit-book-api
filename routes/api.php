@@ -44,6 +44,12 @@ Route::prefix('v1')->group(function () {
             ->middleware('throttle:10,1');
         Route::post('pin/reset', [AuthController::class, 'resetPin'])
             ->middleware('throttle:5,1');
+        Route::post('2fa/verify', [AuthController::class, 'verifyTwoFactor'])
+            ->middleware('throttle:10,1');
+        Route::post('2fa/resend', [AuthController::class, 'resendTwoFactor'])
+            ->middleware('throttle:5,1');
+        Route::post('2fa/switch-method', [AuthController::class, 'switchTwoFactorMethod'])
+            ->middleware('throttle:10,1');
     });
 
     // Public avatar image route (bypasses LiteSpeed symlink 403 restrictions)
@@ -81,6 +87,12 @@ Route::prefix('v1')->group(function () {
             Route::put('pin/login', [AuthController::class, 'setLoginPin']);
             Route::put('pin/transaction', [AuthController::class, 'setTransactionPin']);
             Route::post('pin/transaction/verify', [AuthController::class, 'verifyTransactionPin']);
+            Route::post('2fa/send-setup-code', [AuthController::class, 'sendTwoFactorSetupCode'])
+                ->middleware('throttle:5,1');
+            Route::post('2fa/enable', [AuthController::class, 'enableTwoFactor'])
+                ->middleware('throttle:10,1');
+            Route::post('2fa/disable', [AuthController::class, 'disableTwoFactor'])
+                ->middleware('throttle:10,1');
         });
 
         // Contacts

@@ -32,6 +32,12 @@ class User extends Authenticatable
         'legacy_access_enabled',
         'legacy_recovery_code_hash',
         'legacy_waiting_period_days',
+        'two_factor_enabled',
+        'two_factor_method',
+        'two_factor_secret',
+        'two_factor_code',
+        'two_factor_token',
+        'two_factor_expires_at',
     ];
 
     protected $hidden = [
@@ -40,6 +46,9 @@ class User extends Authenticatable
         'login_pin_hash',
         'transaction_pin_hash',
         'legacy_recovery_code_hash',
+        'two_factor_secret',
+        'two_factor_code',
+        'two_factor_token',
     ];
 
     protected function casts(): array
@@ -51,6 +60,10 @@ class User extends Authenticatable
             'settings' => 'array',
             'legacy_access_enabled' => 'boolean',
             'legacy_waiting_period_days' => 'integer',
+            'two_factor_enabled' => 'boolean',
+            'two_factor_method' => 'string',
+            'two_factor_secret' => 'encrypted',
+            'two_factor_expires_at' => 'datetime',
         ];
     }
 
