@@ -29,7 +29,7 @@ class SetETagHeader
 
         $etag = '"' . md5($content) . '"';
         $response->headers->set('ETag', $etag);
-        $response->headers->set('Cache-Control', 'private, must-revalidate');
+        $response->headers->set('Cache-Control', 'no-cache, private, must-revalidate');
 
         $ifNoneMatch = $request->header('If-None-Match');
         if ($ifNoneMatch) {
@@ -37,7 +37,7 @@ class SetETagHeader
             if (in_array($etag, $clientEtags, true) || in_array('*', $clientEtags, true)) {
                 return response('', 304, [
                     'ETag' => $etag,
-                    'Cache-Control' => 'private, must-revalidate',
+                    'Cache-Control' => 'no-cache, private, must-revalidate',
                 ]);
             }
         }
