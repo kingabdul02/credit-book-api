@@ -19,7 +19,7 @@ class StoreTransactionRequest extends FormRequest
             'amount' => ['required', 'numeric', 'min:0.01', 'max:999999999999.99'],
             'type' => ['sometimes', 'string', 'in:PAYMENT,ADDITIONAL'],
             'note' => ['nullable', 'string', 'max:1000'],
-            'client_id' => ['required', 'uuid', 'unique:transactions,client_id'],
+            'client_id' => ['required', 'uuid'],
         ];
     }
 

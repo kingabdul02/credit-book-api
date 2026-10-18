@@ -26,7 +26,7 @@ class StoreDebtRequest extends FormRequest
             'category' => ['nullable', 'string', 'max:100'],
             'due_date' => ['nullable', 'date', 'after_or_equal:today'],
             'reminder_enabled' => ['sometimes', 'boolean'],
-            'client_id' => ['required', 'uuid', 'unique:debts,client_id'],
+            'client_id' => ['required', 'uuid'],
             'transaction_client_id' => ['nullable', 'uuid'],
         ];
     }

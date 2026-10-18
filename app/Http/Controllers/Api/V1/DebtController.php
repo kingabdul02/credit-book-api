@@ -139,6 +139,17 @@ class DebtController extends Controller
      */
     public function store(StoreDebtRequest $request): JsonResponse
     {
+        $existing = \App\Models\Debt::where('user_id', $request->user()->id)
+            ->where('client_id', $request->input('client_id'))
+            ->first();
+
+        if ($existing) {
+            return response()->json([
+                'message' => 'Debt recorded successfully.',
+                'debt' => new DebtResource($existing->load(['contact', 'transactions'])),
+            ], 200);
+        }
+
         $debt = $this->debtService->create(
             $request->user()->id,
             $request->validated(),

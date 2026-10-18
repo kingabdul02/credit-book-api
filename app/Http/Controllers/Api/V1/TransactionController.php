@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Enums\LedgerType;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Transaction\StoreTransactionRequest;
+use App\Http\Resources\DebtResource;
 use App\Http\Resources\TransactionResource;
 use App\Services\DebtService;
 use App\Services\TransactionService;
@@ -41,6 +42,18 @@ class TransactionController extends Controller
     {
         $debt = $this->debtService->find($debtId, $request->user()->id);
         $type = $request->validated('type', 'PAYMENT');
+        $clientId = $request->validated('client_id');
+
+        $existingTxn = \App\Models\Transaction::where('client_id', $clientId)->first();
+        if ($existingTxn) {
+            return response()->json([
+                'message' => $type === 'ADDITIONAL'
+                    ? 'Additional amount recorded successfully.'
+                    : 'Payment recorded successfully.',
+                'debt' => new DebtResource($debt->fresh(['contact', 'transactions'])),
+                'transaction' => new TransactionResource($existingTxn),
+            ], 200);
+        }
 
         if ($type === 'ADDITIONAL') {
             $updatedDebt = $this->debtService->recordAdditional(

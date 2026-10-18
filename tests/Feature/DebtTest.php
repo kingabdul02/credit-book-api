@@ -174,4 +174,62 @@ class DebtTest extends TestCase
 
         $response->assertStatus(404);
     }
+
+    public function test_debt_creation_is_idempotent_by_client_id(): void
+    {
+        $clientId = Str::uuid()->toString();
+
+        $payload = [
+            'contact_id' => $this->contact->id,
+            'transaction_type' => 'THEY_OWE_ME',
+            'amount' => 15000,
+            'note' => 'Idempotent loan test',
+            'client_id' => $clientId,
+        ];
+
+        // First call
+        $first = $this->actingAs($this->user)->postJson('/api/v1/debts', $payload);
+        $first->assertStatus(201);
+        $debtId = $first->json('debt.id');
+
+        // Second call with same client_id (simulate offline replay/sync retry)
+        $second = $this->actingAs($this->user)->postJson('/api/v1/debts', $payload);
+        $second->assertStatus(200);
+        $this->assertEquals($debtId, $second->json('debt.id'));
+
+        // Verify only 1 debt exists in DB
+        $this->assertDatabaseCount('debts', 1);
+    }
+
+    public function test_payment_recording_is_idempotent_and_resolves_debt_by_client_id(): void
+    {
+        $debtClientId = Str::uuid()->toString();
+        $debt = Debt::factory()->create([
+            'user_id' => $this->user->id,
+            'contact_id' => $this->contact->id,
+            'original_amount' => 10000,
+            'paid_amount' => 0,
+            'status' => DebtStatus::UNPAID,
+            'client_id' => $debtClientId,
+        ]);
+
+        $paymentClientId = Str::uuid()->toString();
+        $payload = [
+            'amount' => 4000,
+            'note' => 'Idempotent partial payment',
+            'client_id' => $paymentClientId,
+        ];
+
+        // Route using debt's client_id instead of server id
+        $first = $this->actingAs($this->user)->postJson("/api/v1/debts/{$debtClientId}/transactions", $payload);
+        $first->assertStatus(201);
+
+        // Replay with same transaction client_id
+        $second = $this->actingAs($this->user)->postJson("/api/v1/debts/{$debtClientId}/transactions", $payload);
+        $second->assertStatus(200);
+
+        // Verify only 1 payment transaction exists
+        $this->assertEquals(1, \App\Models\Transaction::where('client_id', $paymentClientId)->count());
+    }
 }
+

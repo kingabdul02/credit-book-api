@@ -135,7 +135,11 @@ class DebtService
     {
         return Debt::forUser($userId)
             ->with(['contact', 'transactions', 'reminders'])
-            ->findOrFail($debtId);
+            ->where(function ($q) use ($debtId) {
+                $q->where('id', $debtId)
+                    ->orWhere('client_id', $debtId);
+            })
+            ->firstOrFail();
     }
 
     /**
